@@ -1846,13 +1846,11 @@ async function updateMemesVariable(ctx: Context, config: Config, service: MemesL
   const baseUrl = toAbsoluteBaseUrl(ctx, config)
   const inventory = await service.buildRouteInventory(config.backendPath)
 
-  const endpointText = config.injectVariablesPrompt
+  ;(ctx as any).chatluna.promptRenderer.setVariable('endpoint', inventory || '- 暂无可用路由')
+
+  const memeslunaText = config.injectVariablesPrompt
+    .replace('{endpoint}', inventory || '- 暂无可用路由')
     .replace('{base_url}', baseUrl)
-    .replace('{memesluna}', inventory || '- 暂无可用路由')
-
-  ;(ctx as any).chatluna.promptRenderer.setVariable('endpoint', endpointText)
-
-  const memeslunaText = `你可以使用表情包来丰富你的回复。表情包列表是${inventory || '- 暂无可用路由'}，基础URL是${baseUrl}，你要把基础URL拼接到路径前面,不要加文件名,只加路径,用发送图片的方式发送。`
 
   ;(ctx as any).chatluna.promptRenderer.setVariable('memesluna', memeslunaText)
 }
@@ -1990,8 +1988,8 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     const inventory = await service.buildRouteInventory(basePath)
 
     const llmPrompt = config.injectVariablesPrompt
+      .replace('{endpoint}', inventory || '- 暂无可用路由')
       .replace('{base_url}', baseUrl)
-      .replace('{memesluna}', inventory || '- 暂无可用路由')
 
     koa.body = {
       llmPrompt,

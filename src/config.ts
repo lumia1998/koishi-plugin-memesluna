@@ -50,8 +50,8 @@ export const Config: Schema<Config> = Schema.object({
     .description('变量刷新间隔（毫秒）'),
   injectVariablesPrompt: Schema.string()
     .role('textarea')
-    .default(`可用的图片路由列表：\n{memesluna}\n基础URL：{base_url}\n使用时将基础URL拼接到路径前面，不要添加文件名，直接使用路径即可。`)
-    .description('注入到 ChatLuna {{endpoint}} 变量的提示词模板，支持 {memesluna} 和 {base_url} 占位符'),
+    .default(`你可以使用表情包来丰富你的回复。表情包列表是{endpoint}，基础URL是{base_url}，你要把基础URL拼接到路径前面,不要加文件名,只加路径,用发送图片的方式发送。`)
+    .description('注入到 ChatLuna {{memesluna}} 变量的提示词模板，支持 {endpoint} 和 {base_url} 占位符'),
 })
 
 export const name = 'memesluna'
