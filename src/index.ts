@@ -639,6 +639,9 @@ function buildHomepageHtml(basePath: string): string {
           <li class="nav-item">
             <a class="nav-link" href="${basePath}/admin">管理</a>
           </li>
+          <li class="nav-item">
+            <a class="nav-link" href="${basePath}/admin/endpoint">端点</a>
+          </li>
         </ul>
       </div>
     </div>
@@ -2258,11 +2261,15 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
   })
 
   ctx.server.get(`${basePath}/admin`, async (koa) => {
-    koa.redirect(`${basePath}/#admin`)
+    koa.status = 200
+    koa.set('Content-Type', 'text/html; charset=utf-8')
+    koa.body = buildAdminHtml(basePath)
   })
 
   ctx.server.get(`${basePath}/admin/endpoint`, async (koa) => {
-    koa.redirect(`${basePath}/#endpoint`)
+    koa.status = 200
+    koa.set('Content-Type', 'text/html; charset=utf-8')
+    koa.body = buildAdminEndpointHtml(basePath)
   })
 
   ctx.server.get(`${basePath}/api/collections/:name/resources`, async (koa) => {
