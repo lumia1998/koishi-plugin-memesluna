@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+lib/
+dist/
+*.tgz
+
+# TypeScript incremental cache
+tsconfig.tsbuildinfo
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Environment / local settings
+.env
+.env.*
+.npmrc
+
+# OS
+.DS_Store
+Thumbs.db
