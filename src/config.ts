@@ -25,7 +25,6 @@ export interface Config {
   backendPath: string
   storagePath: string
   selfUrl: string
-  baseTag: string
   injectVariables: boolean
   variableRefreshIntervalMs: number
   injectVariablesPrompt: string
@@ -41,9 +40,6 @@ export const Config: Schema<Config> = Schema.object({
   selfUrl: Schema.string()
     .default('')
     .description('服务公开地址，不填则优先使用 server.selfUrl'),
-  baseTag: Schema.string()
-    .default('')
-    .description('special_pollinations 使用的基础标签'),
   injectVariables: Schema.boolean()
     .default(true)
     .description('是否向 ChatLuna 注入 {memesluna}'),

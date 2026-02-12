@@ -56,6 +56,7 @@ export interface ApiEndpointInput {
 
 export interface CollectionInfo {
   name: string
+  description: string
   totalCount: number
   localCount: number
   linkCount: number
@@ -157,6 +158,26 @@ export class MemesLunaService extends Service {
 
   private getCollectionLinksFile(collectionName: string) {
     return path.join(this.getCollectionDir(collectionName), `${collectionName}.txt`)
+  }
+
+  private getCollectionDescriptionFile(collectionName: string) {
+    return path.join(this.getCollectionDir(collectionName), '.description')
+  }
+
+  async getCollectionDescription(collectionName: string): Promise<string> {
+    try {
+      return (await fs.readFile(this.getCollectionDescriptionFile(collectionName), 'utf8')).trim()
+    } catch {
+      return ''
+    }
+  }
+
+  async setCollectionDescription(collectionName: string, description: string): Promise<boolean> {
+    if (!(await this.collectionExists(collectionName))) {
+      return false
+    }
+    await fs.writeFile(this.getCollectionDescriptionFile(collectionName), description.trim(), 'utf8')
+    return true
   }
 
   async collectionExists(collectionName: string): Promise<boolean> {
@@ -464,9 +485,11 @@ export class MemesLunaService extends Service {
 
     const localImages = await this.getCollectionImages(collectionName)
     const links = await this.getCollectionLinks(collectionName)
+    const description = await this.getCollectionDescription(collectionName)
 
     return {
       name: collectionName,
+      description,
       localCount: localImages.length,
       linkCount: links.length,
       totalCount: localImages.length + links.length,
@@ -608,14 +631,15 @@ export class MemesLunaService extends Service {
         .map((param) => `${param.name}=<${param.name}>`)
         .join('&')
       const suffix = queryPart ? `?${queryPart}` : ''
-      const desc = endpoint.description || endpoint.group || endpoint.name
-      lines.push(`- ${desc}: ${backendPath}/${endpoint.name}${suffix}`)
+      const desc = endpoint.description || endpoint.name
+      lines.push(`- ${endpoint.name} ${desc} ${backendPath}/${endpoint.name}${suffix}`)
     }
 
     for (const collection of collections) {
       const info = await this.getCollectionInfo(collection)
       if (info?.hasContent) {
-        lines.push(`- 集合 ${collection}: ${backendPath}/${collection}`)
+        const desc = info.description || collection
+        lines.push(`- ${collection} ${desc} ${backendPath}/${collection}`)
       }
     }
 

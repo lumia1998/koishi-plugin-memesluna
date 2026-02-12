@@ -215,9 +215,8 @@ async function applyDynamicForward(
       }
 
       const modelName = endpoint.modelName || ''
-      const baseTag = config.baseTag || ''
       const prefix = endpoint.url || ''
-      const promptUrl = `${prefix}${encodeURIComponent(tags)}%2c${encodeURIComponent(baseTag)}?&model=${encodeURIComponent(modelName)}&nologo=true`
+      const promptUrl = `${prefix}${encodeURIComponent(tags)}?&model=${encodeURIComponent(modelName)}&nologo=true`
 
       return { redirectTo: promptUrl }
     }
@@ -961,6 +960,13 @@ function buildAdminHtml(basePath: string): string {
           <button id="delete-collection" class="btn btn-outline-danger w-100" disabled>删除当前合集</button>
 
           <hr>
+          <h6 class="mb-2">合集描述</h6>
+          <div class="input-group mb-3">
+            <input id="collection-description" class="form-control" placeholder="为当前合集添加描述" disabled />
+            <button id="save-description" class="btn btn-primary" disabled>保存</button>
+          </div>
+
+          <hr>
           <h6 class="mb-2">快捷信息</h6>
           <div class="small text-muted">
             <div>管理链接：<code>${basePath}/admin</code></div>
@@ -1125,6 +1131,11 @@ function buildAdminHtml(basePath: string): string {
       byId('upload-images').disabled = !selected
       byId('add-links').disabled = !selected
       byId('collection-random-url').textContent = selected ? BASE_PATH + '/' + selected : '-'
+      byId('collection-description').disabled = !selected
+      byId('save-description').disabled = !selected
+
+      const collectionInfo = state.collections.find((c) => c.name === selected)
+      byId('collection-description').value = collectionInfo ? (collectionInfo.description || '') : ''
     }
 
     function renderCollectionList() {
@@ -1364,6 +1375,17 @@ function buildAdminHtml(basePath: string): string {
         method: 'DELETE',
       })
       showAlert('合集已删除', 'success')
+      await refreshState()
+    })
+
+    byId('save-description').addEventListener('click', async () => {
+      if (!state.selectedCollection) return
+      const description = byId('collection-description').value.trim()
+      await request(BASE_PATH + '/api/admin/collections/' + encodeURIComponent(state.selectedCollection) + '/description', {
+        method: 'PATCH',
+        body: JSON.stringify({ description }),
+      })
+      showAlert('描述已保存', 'success')
       await refreshState()
     })
 
@@ -1824,11 +1846,15 @@ async function updateMemesVariable(ctx: Context, config: Config, service: MemesL
   const baseUrl = toAbsoluteBaseUrl(ctx, config)
   const inventory = await service.buildRouteInventory(config.backendPath)
 
-  const promptText = config.injectVariablesPrompt
+  const endpointText = config.injectVariablesPrompt
     .replace('{base_url}', baseUrl)
     .replace('{memesluna}', inventory || '- 暂无可用路由')
 
-  ;(ctx as any).chatluna.promptRenderer.setVariable('memesluna', promptText)
+  ;(ctx as any).chatluna.promptRenderer.setVariable('endpoint', endpointText)
+
+  const memeslunaText = `你可以使用表情包来丰富你的回复。表情包列表是${inventory || '- 暂无可用路由'}，基础URL是${baseUrl}，你要把基础URL拼接到路径前面,不要加文件名,只加路径,用发送图片的方式发送。`
+
+  ;(ctx as any).chatluna.promptRenderer.setVariable('memesluna', memeslunaText)
 }
 
 function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
@@ -1876,6 +1902,13 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
     'memesluna/deleteCollection',
     withReady(async (name: string) => {
       return await service.deleteCollection(name)
+    })
+  )
+
+  consoleService.addListener(
+    'memesluna/setCollectionDescription',
+    withReady(async (name: string, description: string) => {
+      return await service.setCollectionDescription(name, description)
     })
   )
 
@@ -2005,6 +2038,21 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
 
     const deleted = await service.deleteCollection(name)
     if (!deleted) {
+      koa.status = 404
+      koa.body = { error: 'Collection not found' }
+      return
+    }
+
+    koa.body = { ok: true }
+  })
+
+  ctx.server.patch(`${basePath}/api/admin/collections/:name/description`, async (koa) => {
+    const name = toTrimmedString(koa.params.name)
+    const body = getRequestBody(koa)
+    const description = toTrimmedString(body.description)
+
+    const updated = await service.setCollectionDescription(name, description)
+    if (!updated) {
       koa.status = 404
       koa.body = { error: 'Collection not found' }
       return
@@ -2319,6 +2367,7 @@ export function apply(ctx: Context, config: Config) {
       ctx.setInterval(refresh, config.variableRefreshIntervalMs)
 
       ctx.effect(() => () => {
+        ;(ctx as any).chatluna.promptRenderer.removeVariable('endpoint')
         ;(ctx as any).chatluna.promptRenderer.removeVariable('memesluna')
       })
     })
