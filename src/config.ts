@@ -42,7 +42,7 @@ export const Config: Schema<Config> = Schema.object({
     .description('服务公开地址，不填则优先使用 server.selfUrl'),
   injectVariables: Schema.boolean()
     .default(true)
-    .description('是否向 ChatLuna 注入 {memesluna}'),
+    .description('是否向 ChatLuna 注入 {{endpoint}} 和 {{memesluna}} 变量'),
   variableRefreshIntervalMs: Schema.number()
     .min(30 * 1000)
     .max(60 * 60 * 1000)
@@ -50,18 +50,8 @@ export const Config: Schema<Config> = Schema.object({
     .description('变量刷新间隔（毫秒）'),
   injectVariablesPrompt: Schema.string()
     .role('textarea')
-    .default(`picture_url: |
-  {
-  你可以使用 {memesluna} 提供的路由库存来完成图片 URL 生成。
-  规则：
-  1) 根据用户意图选择最合适的路径
-  2) 对有必填 query 的路由补齐参数
-  3) 最终仅输出完整 URL
-  基础URL：{base_url}
-  路由库存：
-  {memesluna}
-  }`)
-    .description('注入到 ChatLuna 的提示词模板'),
+    .default(`可用的图片路由列表：\n{memesluna}\n基础URL：{base_url}\n使用时将基础URL拼接到路径前面，不要添加文件名，直接使用路径即可。`)
+    .description('注入到 ChatLuna {{endpoint}} 变量的提示词模板，支持 {memesluna} 和 {base_url} 占位符'),
 })
 
 export const name = 'memesluna'
