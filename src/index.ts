@@ -604,8 +604,8 @@ function buildHomepageHtml(basePath: string): string {
       animation: spin 1s linear infinite;
     }
 
-      display: none;
-      border-left: 4px solid #dc3545;
+    .error-panel {
+      display: none !important;
     }
 
     @keyframes spin {
@@ -639,9 +639,6 @@ function buildHomepageHtml(basePath: string): string {
           <li class="nav-item">
             <a class="nav-link" href="${basePath}/admin">管理</a>
           </li>
-          <li class="nav-item">
-            <a class="nav-link" href="${basePath}/admin/endpoint">端点</a>
-          </li>
         </ul>
       </div>
     </div>
@@ -671,6 +668,7 @@ function buildHomepageHtml(basePath: string): string {
       const panel = document.getElementById('error-panel')
       const text = document.getElementById('error-text')
       if (text) text.textContent = message
+      if (panel) panel.classList.remove('error-panel')
       if (panel) panel.style.display = 'block'
     }
 
@@ -823,7 +821,7 @@ function buildAdminHtml(basePath: string): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>图床转发 - 管理</title>
+  <title>图床转发 - 合集管理</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
   <style>
@@ -858,36 +856,102 @@ function buildAdminHtml(basePath: string): string {
       max-width: 1320px;
     }
 
-    .sidebar-panel,
-    .main-panel,
-    .sub-card {
+    .panel {
       border-radius: 14px;
       border: 1px solid rgba(255, 255, 255, 0.5);
       background: rgba(255, 255, 255, 0.72);
       -webkit-backdrop-filter: blur(10px) saturate(130%);
       backdrop-filter: blur(10px) saturate(130%);
       box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
-    }
-
-    .sidebar-panel {
-      padding: 1rem;
-      position: sticky;
-      top: 1rem;
-    }
-
-    .main-panel {
       padding: 1rem;
     }
 
-    .collection-item {
+    .sub-card {
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      background: rgba(255, 255, 255, 0.72);
+      -webkit-backdrop-filter: blur(10px) saturate(130%);
+      backdrop-filter: blur(10px) saturate(130%);
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+      padding: 0.9rem;
+    }
+
+    .folder-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+
+    .folder-card {
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      background: rgba(255, 255, 255, 0.88);
       cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
 
-    .collection-item.active {
-      background: rgba(59, 130, 246, 0.14);
-      border-color: rgba(59, 130, 246, 0.35);
-      color: #1d4ed8;
+    .folder-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+    }
+
+    .folder-card .folder-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100px;
+      background: linear-gradient(135deg, #e0e7ff 0%, #f0f4ff 100%);
+      font-size: 2.5rem;
+      color: #6366f1;
+    }
+
+    .folder-card .folder-info {
+      padding: 0.6rem 0.8rem;
+    }
+
+    .folder-card .folder-name {
       font-weight: 700;
+      font-size: 0.95rem;
+      color: #334155;
+    }
+
+    .folder-card .folder-meta {
+      font-size: 0.78rem;
+      color: #64748b;
+    }
+
+    .folder-card .folder-desc {
+      font-size: 0.78rem;
+      color: #94a3b8;
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .folder-card .folder-path {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.72rem;
+      color: #a5b4fc;
+      margin-top: 2px;
+    }
+
+    .desc-editor {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.8rem;
+    }
+
+    .desc-editor input {
+      flex: 1;
+    }
+
+    .desc-display {
+      font-size: 0.88rem;
+      color: #64748b;
+      margin-bottom: 0.5rem;
     }
 
     .image-grid {
@@ -911,10 +975,6 @@ function buildAdminHtml(basePath: string): string {
       background: #f1f5f9;
     }
 
-    .sub-card {
-      padding: 0.9rem;
-    }
-
     .code-url {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 0.8rem;
@@ -930,6 +990,21 @@ function buildAdminHtml(basePath: string): string {
     .empty-tip {
       color: #64748b;
       font-size: 0.9rem;
+    }
+
+    .drop-zone {
+      border: 2px dashed #94a3b8;
+      border-radius: 12px;
+      padding: 2rem;
+      text-align: center;
+      color: #64748b;
+      transition: border-color 0.2s, background 0.2s;
+      cursor: pointer;
+    }
+
+    .drop-zone.drag-over {
+      border-color: #6366f1;
+      background: rgba(99, 102, 241, 0.06);
     }
   </style>
 </head>
@@ -951,105 +1026,70 @@ function buildAdminHtml(basePath: string): string {
   </nav>
 
   <div class="container admin-shell mt-3 pb-4">
-    <div class="row g-3">
-      <div class="col-lg-3">
-        <div class="sidebar-panel">
-          <h5 class="mb-3">合集管理</h5>
-          <div class="input-group mb-3">
-            <input id="new-collection-name" class="form-control" placeholder="新合集名称" />
-            <button id="create-collection" class="btn btn-primary">创建</button>
-          </div>
-          <div id="collection-list" class="list-group mb-3"></div>
-          <button id="delete-collection" class="btn btn-outline-danger w-100" disabled>删除当前合集</button>
-
-          <hr>
-          <h6 class="mb-2">合集描述</h6>
-          <div class="input-group mb-3">
-            <input id="collection-description" class="form-control" placeholder="为当前合集添加描述" disabled />
-            <button id="save-description" class="btn btn-primary" disabled>保存</button>
-          </div>
-
-          <hr>
-          <h6 class="mb-2">快捷信息</h6>
-          <div class="small text-muted">
-            <div>管理链接：<code>${basePath}/admin</code></div>
-            <div class="mt-1">随机访问：<code id="collection-random-url">-</code></div>
+    <!-- View: folder list (main) -->
+    <div id="view-folders">
+      <div class="panel mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0">合集管理</h5>
+          <div class="d-flex gap-2">
+            <input id="new-collection-name" class="form-control form-control-sm" style="width:180px" placeholder="新合集名称" />
+            <button id="create-collection" class="btn btn-sm btn-primary">创建</button>
           </div>
         </div>
+        <div id="folder-grid" class="folder-grid"></div>
+        <div id="folders-empty" class="empty-tip mt-2">暂无合集，请先创建</div>
       </div>
+    </div>
 
-      <div class="col-lg-9">
-        <div class="main-panel mb-3">
-          <div class="d-flex justify-content-between align-items-center">
-            <h5 class="mb-0">合集内容</h5>
-            <span id="selected-collection-badge" class="badge bg-primary">未选择</span>
+    <!-- View: collection detail -->
+    <div id="view-detail" style="display:none">
+      <div class="panel mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <div class="d-flex align-items-center gap-2">
+            <button id="back-to-folders" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-left"></i> 返回</button>
+            <h5 class="mb-0" id="detail-title"></h5>
           </div>
+          <div class="d-flex gap-2">
+            <button id="refresh-resources" class="btn btn-sm btn-outline-primary"><i class="bi bi-arrow-clockwise"></i> 刷新缓存</button>
+            <button id="delete-collection" class="btn btn-sm btn-outline-danger">删除合集</button>
+          </div>
+        </div>
+        <div id="detail-path" class="desc-display" style="font-family:monospace;color:#a5b4fc;font-size:0.82rem"></div>
+        <div class="desc-editor">
+          <input id="desc-input" class="form-control form-control-sm" placeholder="为这个合集添加描述，例如：千恋万花的丛雨表情包" />
+          <button id="save-desc" class="btn btn-sm btn-outline-primary">保存描述</button>
+        </div>
 
-          <div class="row g-3 mt-1">
-            <div class="col-md-6">
-              <div class="sub-card h-100">
-                <div class="section-title mb-2">上传本地图片</div>
-                <input id="upload-files" type="file" class="form-control mb-2" multiple accept="image/*" />
-                <button id="upload-images" class="btn btn-primary w-100" disabled>上传到当前合集</button>
-                <div class="form-text">支持多选。上传后自动刷新列表。</div>
+        <div class="row g-3 mb-3">
+          <div class="col-md-6">
+            <div class="sub-card h-100">
+              <div class="section-title mb-2">上传图片</div>
+              <div id="drop-zone" class="drop-zone mb-2">
+                <i class="bi bi-cloud-arrow-up" style="font-size:1.5rem"></i>
+                <div>拖放图片到此处，或点击选择文件</div>
+                <input id="upload-files" type="file" class="d-none" multiple accept="image/*" />
               </div>
             </div>
-            <div class="col-md-6">
-              <div class="sub-card h-100">
-                <div class="section-title mb-2">添加外链</div>
-                <textarea id="links-input" class="form-control mb-2" rows="4" placeholder="每行一个 http/https 链接"></textarea>
-                <button id="add-links" class="btn btn-primary w-100" disabled>添加外链到当前合集</button>
-              </div>
+          </div>
+          <div class="col-md-6">
+            <div class="sub-card h-100">
+              <div class="section-title mb-2">添加外链</div>
+              <textarea id="links-input" class="form-control mb-2" rows="3" placeholder="每行一个 http/https 链接"></textarea>
+              <button id="add-links" class="btn btn-primary btn-sm w-100">添加外链</button>
             </div>
-          </div>
-
-          <div class="sub-card mt-3">
-            <div class="section-title mb-2">本地图片</div>
-            <div id="images-grid" class="image-grid"></div>
-            <div id="images-empty" class="empty-tip mt-2">暂无本地图片</div>
-          </div>
-
-          <div class="sub-card mt-3">
-            <div class="section-title mb-2">外链列表</div>
-            <div id="links-list" class="list-group"></div>
-            <div id="links-empty" class="empty-tip mt-2">暂无外链</div>
           </div>
         </div>
 
-        <div class="main-panel">
-          <h5 class="mb-3">API 端点管理</h5>
+        <div class="sub-card mb-3">
+          <div class="section-title mb-2">本地图片</div>
+          <div id="images-grid" class="image-grid"></div>
+          <div id="images-empty" class="empty-tip mt-2">暂无本地图片</div>
+        </div>
 
-          <div class="row g-2 mb-3">
-            <div class="col-md-3"><input id="endpoint-name" class="form-control" placeholder="name" /></div>
-            <div class="col-md-3"><input id="endpoint-group" class="form-control" placeholder="group" /></div>
-            <div class="col-md-3"><select id="endpoint-method" class="form-select"><option value="redirect">redirect</option><option value="proxy">proxy</option></select></div>
-            <div class="col-md-3"><select id="endpoint-mode" class="form-select"><option value="normal">normal</option><option value="special_forward">special_forward</option><option value="special_pollinations">special_pollinations</option><option value="special_draw_redirect">special_draw_redirect</option></select></div>
-            <div class="col-md-8"><input id="endpoint-url" class="form-control" placeholder="target url" /></div>
-            <div class="col-md-4"><input id="endpoint-model" class="form-control" placeholder="modelName (optional)" /></div>
-            <div class="col-md-6"><textarea id="endpoint-description" class="form-control" rows="2" placeholder="description"></textarea></div>
-            <div class="col-md-3"><textarea id="endpoint-query" class="form-control code-url" rows="2" placeholder='queryParams JSON'></textarea></div>
-            <div class="col-md-3"><textarea id="endpoint-proxy" class="form-control code-url" rows="2" placeholder='proxySettings JSON'></textarea></div>
-          </div>
-
-          <div class="d-flex gap-2 mb-3">
-            <button id="save-endpoint" class="btn btn-primary">创建 / 更新端点</button>
-            <button id="reset-endpoint" class="btn btn-outline-secondary">清空表单</button>
-          </div>
-
-          <div class="table-responsive">
-            <table class="table table-sm align-middle">
-              <thead>
-                <tr>
-                  <th>name</th>
-                  <th>method</th>
-                  <th>mode</th>
-                  <th>url</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="endpoint-table"></tbody>
-            </table>
-          </div>
+        <div class="sub-card">
+          <div class="section-title mb-2">外链列表</div>
+          <div id="links-list" class="list-group"></div>
+          <div id="links-empty" class="empty-tip mt-2">暂无外链</div>
         </div>
       </div>
     </div>
@@ -1062,7 +1102,6 @@ function buildAdminHtml(basePath: string): string {
     const state = {
       collectionNames: [],
       collections: [],
-      endpoints: [],
       selectedCollection: '',
       images: [],
       links: [],
@@ -1070,100 +1109,115 @@ function buildAdminHtml(basePath: string): string {
 
     const byId = (id) => document.getElementById(id)
 
-    function showAlert(message, type = 'info') {
-      const el = byId('admin-alert')
+    function showAlert(message, type) {
+      type = type || 'info'
+      var el = byId('admin-alert')
       el.className = 'alert alert-' + type + ' mt-3'
       el.textContent = message
       el.classList.remove('d-none')
-      setTimeout(() => el.classList.add('d-none'), 2200)
+      setTimeout(function() { el.classList.add('d-none') }, 2200)
     }
 
-    async function request(url, options = {}) {
-      const headers = Object.assign({}, options.headers || {})
+    async function request(url, options) {
+      options = options || {}
+      var headers = Object.assign({}, options.headers || {})
       if (options.body && !headers['Content-Type']) {
         headers['Content-Type'] = 'application/json'
       }
-      const res = await fetch(url, Object.assign({}, options, { headers }))
-      let data = null
-      try {
-        data = await res.json()
-      } catch {
-        data = null
-      }
+      var res = await fetch(url, Object.assign({}, options, { headers: headers }))
+      var data = null
+      try { data = await res.json() } catch(e) { data = null }
       if (!res.ok) {
         throw new Error(data && data.error ? data.error : String(res.status) + ' ' + String(res.statusText))
       }
       return data
     }
 
-    async function refreshState() {
-      const data = await request(BASE_PATH + '/api/admin/state')
-      state.collectionNames = Array.isArray(data.collectionNames) ? data.collectionNames : []
-      state.collections = Array.isArray(data.collections) ? data.collections : []
-      state.endpoints = Array.isArray(data.endpoints) ? data.endpoints : []
-
-      if (!state.selectedCollection || !state.collectionNames.includes(state.selectedCollection)) {
-        state.selectedCollection = state.collectionNames[0] || ''
-      }
-
-      renderCollectionList()
-      renderEndpointTable()
-      await refreshCollectionResources()
-      syncSelectedCollectionUi()
+    function readFileAsDataURL(file) {
+      return new Promise(function(resolve, reject) {
+        var reader = new FileReader()
+        reader.onload = function() { resolve(reader.result) }
+        reader.onerror = function() { reject(new Error('读取文件失败')) }
+        reader.readAsDataURL(file)
+      })
     }
 
+    /* --- Folder list view --- */
+    async function refreshState() {
+      var data = await request(BASE_PATH + '/api/admin/state')
+      state.collectionNames = Array.isArray(data.collectionNames) ? data.collectionNames : []
+      state.collections = Array.isArray(data.collections) ? data.collections : []
+      renderFolderGrid()
+    }
+
+    function renderFolderGrid() {
+      var grid = byId('folder-grid')
+      var empty = byId('folders-empty')
+      grid.textContent = ''
+      empty.style.display = state.collections.length ? 'none' : 'block'
+
+      state.collections.forEach(function(col) {
+        var card = document.createElement('div')
+        card.className = 'folder-card'
+        card.addEventListener('click', function() { enterCollection(col.name) })
+
+        var icon = document.createElement('div')
+        icon.className = 'folder-icon'
+        icon.innerHTML = '<i class="bi bi-folder-fill"></i>'
+        card.appendChild(icon)
+
+        var info = document.createElement('div')
+        info.className = 'folder-info'
+        var nameEl = document.createElement('div')
+        nameEl.className = 'folder-name'
+        nameEl.textContent = col.name
+        info.appendChild(nameEl)
+        if (col.description) {
+          var descEl = document.createElement('div')
+          descEl.className = 'folder-desc'
+          descEl.textContent = col.description
+          descEl.title = col.description
+          info.appendChild(descEl)
+        }
+        var pathEl = document.createElement('div')
+        pathEl.className = 'folder-path'
+        pathEl.textContent = BASE_PATH + '/' + col.name
+        info.appendChild(pathEl)
+        var meta = document.createElement('div')
+        meta.className = 'folder-meta'
+        meta.textContent = '本地 ' + (col.localCount || 0) + ' / 外链 ' + (col.linkCount || 0)
+        info.appendChild(meta)
+        card.appendChild(info)
+        grid.appendChild(card)
+      })
+    }
+
+    function enterCollection(name) {
+      state.selectedCollection = name
+      byId('view-folders').style.display = 'none'
+      byId('view-detail').style.display = 'block'
+      byId('detail-title').textContent = name
+      byId('detail-path').textContent = '端点路径: ' + BASE_PATH + '/' + name
+      var col = state.collections.find(function(c) { return c.name === name })
+      byId('desc-input').value = (col && col.description) ? col.description : ''
+      refreshCollectionResources()
+    }
+
+    function backToFolders() {
+      state.selectedCollection = ''
+      byId('view-detail').style.display = 'none'
+      byId('view-folders').style.display = 'block'
+      refreshState()
+    }
+
+    /* --- Detail view --- */
     async function refreshCollectionResources() {
-      if (!state.selectedCollection) {
-        state.images = []
-        state.links = []
-        renderImages()
-        renderLinks()
-        return
-      }
-      const data = await request(BASE_PATH + '/api/collections/' + encodeURIComponent(state.selectedCollection) + '/resources')
+      if (!state.selectedCollection) { state.images = []; state.links = []; renderImages(); renderLinks(); return }
+      var data = await request(BASE_PATH + '/api/collections/' + encodeURIComponent(state.selectedCollection) + '/resources')
       state.images = Array.isArray(data.images) ? data.images : []
       state.links = Array.isArray(data.links) ? data.links : []
       renderImages()
       renderLinks()
-    }
-
-    function syncSelectedCollectionUi() {
-      const selected = state.selectedCollection
-      byId('selected-collection-badge').textContent = selected || '未选择'
-      byId('delete-collection').disabled = !selected
-      byId('upload-images').disabled = !selected
-      byId('add-links').disabled = !selected
-      byId('collection-random-url').textContent = selected ? BASE_PATH + '/' + selected : '-'
-      byId('collection-description').disabled = !selected
-      byId('save-description').disabled = !selected
-
-      const collectionInfo = state.collections.find((c) => c.name === selected)
-      byId('collection-description').value = collectionInfo ? (collectionInfo.description || '') : ''
-    }
-
-    function renderCollectionList() {
-      const list = byId('collection-list')
-      list.textContent = ''
-      if (!state.collectionNames.length) {
-        const empty = document.createElement('div')
-        empty.className = 'text-muted small'
-        empty.textContent = '暂无合集'
-        list.appendChild(empty)
-        return
-      }
-      state.collectionNames.forEach((name) => {
-        const button = document.createElement('button')
-        button.type = 'button'
-        button.className = 'list-group-item list-group-item-action collection-item' + (name === state.selectedCollection ? ' active' : '')
-        button.textContent = name
-        button.addEventListener('click', async () => {
-          state.selectedCollection = name
-          renderCollectionList()
-          syncSelectedCollectionUi()
-          await refreshCollectionResources()
-        })
-        list.appendChild(button)
-      })
     }
 
     function imagePreviewUrl(filename) {
@@ -1171,69 +1225,68 @@ function buildAdminHtml(basePath: string): string {
     }
 
     function renderImages() {
-      const grid = byId('images-grid')
-      const empty = byId('images-empty')
+      var grid = byId('images-grid')
+      var empty = byId('images-empty')
       grid.textContent = ''
       empty.style.display = state.images.length ? 'none' : 'block'
 
-      state.images.forEach((name) => {
-        const card = document.createElement('div')
+      state.images.forEach(function(name) {
+        var card = document.createElement('div')
         card.className = 'image-card'
 
-        const img = document.createElement('img')
+        var img = document.createElement('img')
         img.src = imagePreviewUrl(name)
         img.alt = name
         card.appendChild(img)
 
-        const body = document.createElement('div')
+        var body = document.createElement('div')
         body.className = 'p-2'
-        const title = document.createElement('div')
+        var title = document.createElement('div')
         title.className = 'small text-truncate mb-2'
         title.textContent = name
         body.appendChild(title)
 
-        const row = document.createElement('div')
+        var row = document.createElement('div')
         row.className = 'd-flex gap-1'
 
-        const moveSelect = document.createElement('select')
+        var moveSelect = document.createElement('select')
         moveSelect.className = 'form-select form-select-sm'
-        const collections = state.collectionNames.filter((item) => item !== state.selectedCollection)
-        const placeholder = document.createElement('option')
-        placeholder.value = ''
-        placeholder.textContent = '移动到...'
-        moveSelect.appendChild(placeholder)
-        collections.forEach((target) => {
-          const opt = document.createElement('option')
-          opt.value = target
-          opt.textContent = target
+        var others = state.collectionNames.filter(function(c) { return c !== state.selectedCollection })
+        var ph = document.createElement('option')
+        ph.value = ''
+        ph.textContent = '移动到...'
+        moveSelect.appendChild(ph)
+        others.forEach(function(t) {
+          var opt = document.createElement('option')
+          opt.value = t; opt.textContent = t
           moveSelect.appendChild(opt)
         })
 
-        const moveBtn = document.createElement('button')
+        var moveBtn = document.createElement('button')
         moveBtn.className = 'btn btn-sm btn-outline-primary'
         moveBtn.textContent = '移动'
-        moveBtn.disabled = collections.length === 0
-        moveBtn.addEventListener('click', async () => {
-          const targetCollection = moveSelect.value
-          if (!targetCollection) return
+        moveBtn.disabled = others.length === 0
+        moveBtn.addEventListener('click', async function() {
+          var tc = moveSelect.value
+          if (!tc) return
           await request(
             BASE_PATH + '/api/admin/collections/' + encodeURIComponent(state.selectedCollection) + '/images/' + encodeURIComponent(name) + '/move',
-            { method: 'POST', body: JSON.stringify({ targetCollection }) }
+            { method: 'POST', body: JSON.stringify({ targetCollection: tc }) }
           )
           showAlert('图片已移动', 'success')
-          await refreshState()
+          refreshCollectionResources()
         })
 
-        const delBtn = document.createElement('button')
+        var delBtn = document.createElement('button')
         delBtn.className = 'btn btn-sm btn-outline-danger'
         delBtn.textContent = '删除'
-        delBtn.addEventListener('click', async () => {
+        delBtn.addEventListener('click', async function() {
           await request(
             BASE_PATH + '/api/admin/collections/' + encodeURIComponent(state.selectedCollection) + '/images/' + encodeURIComponent(name),
             { method: 'DELETE' }
           )
           showAlert('图片已删除', 'success')
-          await refreshCollectionResources()
+          refreshCollectionResources()
         })
 
         row.appendChild(moveSelect)
@@ -1246,40 +1299,40 @@ function buildAdminHtml(basePath: string): string {
     }
 
     function renderLinks() {
-      const wrap = byId('links-list')
-      const empty = byId('links-empty')
+      var wrap = byId('links-list')
+      var empty = byId('links-empty')
       wrap.textContent = ''
       empty.style.display = state.links.length ? 'none' : 'block'
-      state.links.forEach((link) => {
-        const row = document.createElement('div')
+      state.links.forEach(function(link) {
+        var row = document.createElement('div')
         row.className = 'list-group-item d-flex justify-content-between align-items-center gap-2'
 
-        const text = document.createElement('div')
+        var text = document.createElement('div')
         text.className = 'code-url flex-grow-1'
         text.textContent = link
 
-        const actions = document.createElement('div')
+        var actions = document.createElement('div')
         actions.className = 'd-flex gap-1'
 
-        const open = document.createElement('a')
-        open.className = 'btn btn-sm btn-outline-primary'
-        open.textContent = '查看'
-        open.href = link
-        open.target = '_blank'
+        var openEl = document.createElement('a')
+        openEl.className = 'btn btn-sm btn-outline-primary'
+        openEl.textContent = '查看'
+        openEl.href = link
+        openEl.target = '_blank'
 
-        const del = document.createElement('button')
+        var del = document.createElement('button')
         del.className = 'btn btn-sm btn-outline-danger'
         del.textContent = '删除'
-        del.addEventListener('click', async () => {
+        del.addEventListener('click', async function() {
           await request(
             BASE_PATH + '/api/admin/collections/' + encodeURIComponent(state.selectedCollection) + '/links',
-            { method: 'DELETE', body: JSON.stringify({ link }) }
+            { method: 'DELETE', body: JSON.stringify({ link: link }) }
           )
           showAlert('外链已删除', 'success')
-          await refreshCollectionResources()
+          refreshCollectionResources()
         })
 
-        actions.appendChild(open)
+        actions.appendChild(openEl)
         actions.appendChild(del)
         row.appendChild(text)
         row.appendChild(actions)
@@ -1287,215 +1340,93 @@ function buildAdminHtml(basePath: string): string {
       })
     }
 
-    function fillEndpointForm(item) {
-      byId('endpoint-name').value = item.name || ''
-      byId('endpoint-group').value = item.group || ''
-      byId('endpoint-method').value = item.method || 'redirect'
-      byId('endpoint-mode').value = item.urlConstruction || 'normal'
-      byId('endpoint-url').value = item.url || ''
-      byId('endpoint-model').value = item.modelName || ''
-      byId('endpoint-description').value = item.description || ''
-      byId('endpoint-query').value = JSON.stringify(item.queryParams || [], null, 2)
-      byId('endpoint-proxy').value = JSON.stringify(item.proxySettings || {}, null, 2)
-    }
-
-    function renderEndpointTable() {
-      const body = byId('endpoint-table')
-      body.textContent = ''
-      if (!state.endpoints.length) {
-        const tr = document.createElement('tr')
-        const td = document.createElement('td')
-        td.colSpan = 5
-        td.className = 'text-muted'
-        td.textContent = '暂无 endpoint'
-        tr.appendChild(td)
-        body.appendChild(tr)
-        return
+    /* --- Upload with drag/drop --- */
+    async function uploadFiles(files) {
+      if (!state.selectedCollection || !files || !files.length) return
+      var images = []
+      for (var i = 0; i < files.length; i++) {
+        var b64 = await readFileAsDataURL(files[i])
+        images.push({ base64: b64, originalName: files[i].name })
       }
-
-      state.endpoints.forEach((item) => {
-        const tr = document.createElement('tr')
-        tr.innerHTML =
-          '<td class="code-url"></td>' +
-          '<td></td>' +
-          '<td class="code-url"></td>' +
-          '<td class="code-url"></td>' +
-          '<td></td>'
-
-        tr.children[0].textContent = item.name || ''
-        tr.children[1].textContent = item.method || 'redirect'
-        tr.children[2].textContent = item.urlConstruction || 'normal'
-        tr.children[3].textContent = item.url || ''
-
-        const actions = document.createElement('div')
-        actions.className = 'd-flex gap-1 justify-content-end'
-
-        const edit = document.createElement('button')
-        edit.className = 'btn btn-sm btn-outline-primary'
-        edit.textContent = '编辑'
-        edit.addEventListener('click', () => fillEndpointForm(item))
-
-        const del = document.createElement('button')
-        del.className = 'btn btn-sm btn-outline-danger'
-        del.textContent = '删除'
-        del.addEventListener('click', async () => {
-          await request(BASE_PATH + '/api/admin/endpoints/' + encodeURIComponent(item.name || ''), { method: 'DELETE' })
-          showAlert('端点已删除', 'success')
-          await refreshState()
-        })
-
-        actions.appendChild(edit)
-        actions.appendChild(del)
-        tr.children[4].appendChild(actions)
-        body.appendChild(tr)
+      await request(BASE_PATH + '/api/admin/collections/' + encodeURIComponent(state.selectedCollection) + '/images', {
+        method: 'POST',
+        body: JSON.stringify({ images: images }),
       })
+      showAlert('图片上传成功', 'success')
+      refreshCollectionResources()
     }
 
-    function readFileAsDataURL(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(reader.result)
-        reader.onerror = () => reject(new Error('读取文件失败'))
-        reader.readAsDataURL(file)
-      })
-    }
+    var dropZone = byId('drop-zone')
+    var fileInput = byId('upload-files')
 
-    byId('create-collection').addEventListener('click', async () => {
-      const name = byId('new-collection-name').value.trim()
+    dropZone.addEventListener('click', function() { fileInput.click() })
+    fileInput.addEventListener('change', function() { uploadFiles(fileInput.files); fileInput.value = '' })
+
+    dropZone.addEventListener('dragover', function(e) { e.preventDefault(); dropZone.classList.add('drag-over') })
+    dropZone.addEventListener('dragleave', function(e) { e.preventDefault(); dropZone.classList.remove('drag-over') })
+    dropZone.addEventListener('drop', function(e) {
+      e.preventDefault()
+      dropZone.classList.remove('drag-over')
+      if (e.dataTransfer && e.dataTransfer.files) uploadFiles(e.dataTransfer.files)
+    })
+
+    /* --- Buttons --- */
+    byId('create-collection').addEventListener('click', async function() {
+      var name = byId('new-collection-name').value.trim()
       if (!name) return
       await request(BASE_PATH + '/api/admin/collections', {
         method: 'POST',
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name: name }),
       })
       byId('new-collection-name').value = ''
       showAlert('合集创建成功', 'success')
-      await refreshState()
+      refreshState()
     })
 
-    byId('delete-collection').addEventListener('click', async () => {
+    byId('delete-collection').addEventListener('click', async function() {
       if (!state.selectedCollection) return
+      if (!confirm('确定删除合集 ' + state.selectedCollection + ' ?')) return
       await request(BASE_PATH + '/api/admin/collections/' + encodeURIComponent(state.selectedCollection), {
         method: 'DELETE',
       })
       showAlert('合集已删除', 'success')
-      await refreshState()
+      backToFolders()
     })
 
-    byId('save-description').addEventListener('click', async () => {
+    byId('back-to-folders').addEventListener('click', backToFolders)
+
+    byId('save-desc').addEventListener('click', async function() {
       if (!state.selectedCollection) return
-      const description = byId('collection-description').value.trim()
+      var desc = byId('desc-input').value.trim()
       await request(BASE_PATH + '/api/admin/collections/' + encodeURIComponent(state.selectedCollection) + '/description', {
         method: 'PATCH',
-        body: JSON.stringify({ description }),
+        body: JSON.stringify({ description: desc }),
       })
+      var col = state.collections.find(function(c) { return c.name === state.selectedCollection })
+      if (col) col.description = desc
       showAlert('描述已保存', 'success')
-      await refreshState()
     })
 
-    byId('upload-images').addEventListener('click', async () => {
-      if (!state.selectedCollection) return
-      const files = byId('upload-files').files
-      if (!files || !files.length) return
-      const images = []
-      for (const file of files) {
-        const base64 = await readFileAsDataURL(file)
-        images.push({ base64, originalName: file.name })
-      }
-      await request(BASE_PATH + '/api/admin/collections/' + encodeURIComponent(state.selectedCollection) + '/images', {
-        method: 'POST',
-        body: JSON.stringify({ images }),
-      })
-      byId('upload-files').value = ''
-      showAlert('图片上传成功', 'success')
-      await refreshCollectionResources()
-      await refreshState()
+    byId('refresh-resources').addEventListener('click', function() {
+      refreshCollectionResources()
+      showAlert('已刷新', 'success')
     })
 
-    byId('add-links').addEventListener('click', async () => {
+    byId('add-links').addEventListener('click', async function() {
       if (!state.selectedCollection) return
-      const text = byId('links-input').value
-      const links = text.split(/\r?\n/g).map((line) => line.trim()).filter(Boolean)
-      if (!links.length) return
+      var text = byId('links-input').value
+      var lines = text.split(/\\r?\\n/g).map(function(l) { return l.trim() }).filter(Boolean)
+      if (!lines.length) return
       await request(BASE_PATH + '/api/admin/collections/' + encodeURIComponent(state.selectedCollection) + '/links', {
         method: 'POST',
-        body: JSON.stringify({ links }),
+        body: JSON.stringify({ links: lines }),
       })
       byId('links-input').value = ''
       showAlert('外链添加成功', 'success')
-      await refreshCollectionResources()
-      await refreshState()
+      refreshCollectionResources()
     })
 
-    byId('save-endpoint').addEventListener('click', async () => {
-      const name = byId('endpoint-name').value.trim()
-      const url = byId('endpoint-url').value.trim()
-      if (!name || !url) {
-        showAlert('name 和 url 必填', 'warning')
-        return
-      }
-
-      let queryParams = []
-      let proxySettings = {}
-      try {
-        queryParams = byId('endpoint-query').value.trim() ? JSON.parse(byId('endpoint-query').value) : []
-      } catch {
-        showAlert('queryParams JSON 格式错误', 'warning')
-        return
-      }
-      try {
-        proxySettings = byId('endpoint-proxy').value.trim() ? JSON.parse(byId('endpoint-proxy').value) : {}
-      } catch {
-        showAlert('proxySettings JSON 格式错误', 'warning')
-        return
-      }
-
-      const payload = {
-        name,
-        group: byId('endpoint-group').value.trim(),
-        description: byId('endpoint-description').value.trim(),
-        url,
-        method: byId('endpoint-method').value,
-        urlConstruction: byId('endpoint-mode').value,
-        modelName: byId('endpoint-model').value.trim(),
-        queryParams,
-        proxySettings,
-      }
-
-      const exists = state.endpoints.some((item) => item.name === name)
-      if (exists) {
-        await request(BASE_PATH + '/api/admin/endpoints/' + encodeURIComponent(name), {
-          method: 'PATCH',
-          body: JSON.stringify(payload),
-        })
-        showAlert('端点已更新', 'success')
-      } else {
-        await request(BASE_PATH + '/api/admin/endpoints', {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        })
-        showAlert('端点已创建', 'success')
-      }
-
-      await refreshState()
-    })
-
-    byId('reset-endpoint').addEventListener('click', () => {
-      byId('endpoint-name').value = ''
-      byId('endpoint-group').value = ''
-      byId('endpoint-method').value = 'redirect'
-      byId('endpoint-mode').value = 'normal'
-      byId('endpoint-url').value = ''
-      byId('endpoint-model').value = ''
-      byId('endpoint-description').value = ''
-      byId('endpoint-query').value = ''
-      byId('endpoint-proxy').value = ''
-    })
-
-    byId('upload-files').addEventListener('change', () => {
-      byId('upload-images').disabled = !state.selectedCollection
-    })
-
-    refreshState().catch((error) => {
+    refreshState().catch(function(error) {
       showAlert(error instanceof Error ? error.message : String(error), 'danger')
     })
   </script>
@@ -1510,7 +1441,7 @@ function buildAdminEndpointHtml(basePath: string): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>图床转发 - API 端点管理</title>
+  <title>图床转发 - 302 端点管理</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
   <style>
@@ -1592,22 +1523,8 @@ function buildAdminEndpointHtml(basePath: string): string {
           <input id="endpoint-name" class="form-control mb-2" placeholder="端点名称" />
           <input id="endpoint-description" class="form-control mb-2" placeholder="描述" />
           <input id="endpoint-url" class="form-control mb-2" placeholder="目标 URL" />
-          <input id="endpoint-group" class="form-control mb-2" placeholder="分组" />
-          <select id="endpoint-method" class="form-select mb-2">
-            <option value="redirect">redirect</option>
-            <option value="proxy">proxy</option>
-          </select>
-          <select id="endpoint-mode" class="form-select mb-2">
-            <option value="normal">normal</option>
-            <option value="special_forward">special_forward</option>
-            <option value="special_pollinations">special_pollinations</option>
-            <option value="special_draw_redirect">special_draw_redirect</option>
-          </select>
-          <input id="endpoint-model" class="form-control mb-2" placeholder="modelName (optional)" />
-          <textarea id="endpoint-query" class="form-control code-text mb-2" rows="3" placeholder='queryParams JSON'></textarea>
-          <textarea id="endpoint-proxy" class="form-control code-text mb-2" rows="3" placeholder='proxySettings JSON'></textarea>
 
-          <div class="d-grid gap-2">
+          <div class="d-grid gap-2 mt-3">
             <button id="save-endpoint" class="btn btn-primary">创建</button>
             <button id="reset-endpoint" class="btn btn-outline-secondary">清空</button>
           </div>
@@ -1616,8 +1533,8 @@ function buildAdminEndpointHtml(basePath: string): string {
 
       <div class="col-lg-9">
         <div class="panel">
-          <h4 class="mb-3">API 端点管理</h4>
-          <p class="text-muted mb-3">通过 <code>${basePath}/端点名称</code> 访问。</p>
+          <h4 class="mb-3">302 跳转端点管理</h4>
+          <p class="text-muted mb-3">通过 <code>${basePath}/端点名称</code> 访问，自动 302 跳转到目标 URL。</p>
 
           <div class="table-responsive">
             <table class="table table-sm align-middle">
@@ -1625,8 +1542,8 @@ function buildAdminEndpointHtml(basePath: string): string {
                 <tr>
                   <th>名称</th>
                   <th>描述</th>
-                  <th>模式</th>
                   <th>目标 URL</th>
+                  <th>访问</th>
                   <th></th>
                 </tr>
               </thead>
@@ -1641,34 +1558,32 @@ function buildAdminEndpointHtml(basePath: string): string {
   </div>
 
   <script>
-    const BASE_PATH = '${basePath}'
-    const endpointState = {
+    var BASE_PATH = '${basePath}'
+    var endpointState = {
       endpoints: [],
       editingName: '',
     }
 
-    const byId = (id) => document.getElementById(id)
+    var byId = function(id) { return document.getElementById(id) }
 
-    function showAlert(message, type = 'info') {
-      const el = byId('endpoint-alert')
+    function showAlert(message, type) {
+      type = type || 'info'
+      var el = byId('endpoint-alert')
       el.className = 'alert alert-' + type + ' mt-3'
       el.textContent = message
       el.classList.remove('d-none')
-      setTimeout(() => el.classList.add('d-none'), 2400)
+      setTimeout(function() { el.classList.add('d-none') }, 2400)
     }
 
-    async function request(url, options = {}) {
-      const headers = Object.assign({}, options.headers || {})
+    async function request(url, options) {
+      options = options || {}
+      var headers = Object.assign({}, options.headers || {})
       if (options.body && !headers['Content-Type']) {
         headers['Content-Type'] = 'application/json'
       }
-      const res = await fetch(url, Object.assign({}, options, { headers }))
-      let data = null
-      try {
-        data = await res.json()
-      } catch {
-        data = null
-      }
+      var res = await fetch(url, Object.assign({}, options, { headers: headers }))
+      var data = null
+      try { data = await res.json() } catch(e) { data = null }
       if (!res.ok) {
         throw new Error(data && data.error ? data.error : String(res.status) + ' ' + String(res.statusText))
       }
@@ -1680,12 +1595,6 @@ function buildAdminEndpointHtml(basePath: string): string {
       byId('endpoint-name').value = ''
       byId('endpoint-description').value = ''
       byId('endpoint-url').value = ''
-      byId('endpoint-group').value = ''
-      byId('endpoint-method').value = 'redirect'
-      byId('endpoint-mode').value = 'normal'
-      byId('endpoint-model').value = ''
-      byId('endpoint-query').value = ''
-      byId('endpoint-proxy').value = ''
       byId('save-endpoint').textContent = '创建'
       byId('endpoint-name').disabled = false
     }
@@ -1695,23 +1604,17 @@ function buildAdminEndpointHtml(basePath: string): string {
       byId('endpoint-name').value = item.name || ''
       byId('endpoint-description').value = item.description || ''
       byId('endpoint-url').value = item.url || ''
-      byId('endpoint-group').value = item.group || ''
-      byId('endpoint-method').value = item.method || 'redirect'
-      byId('endpoint-mode').value = item.urlConstruction || 'normal'
-      byId('endpoint-model').value = item.modelName || ''
-      byId('endpoint-query').value = JSON.stringify(item.queryParams || [], null, 2)
-      byId('endpoint-proxy').value = JSON.stringify(item.proxySettings || {}, null, 2)
       byId('save-endpoint').textContent = '更新'
       byId('endpoint-name').disabled = true
     }
 
     function renderTable() {
-      const body = byId('endpoint-table')
+      var body = byId('endpoint-table')
       body.textContent = ''
 
       if (!endpointState.endpoints.length) {
-        const tr = document.createElement('tr')
-        const td = document.createElement('td')
+        var tr = document.createElement('tr')
+        var td = document.createElement('td')
         td.colSpan = 5
         td.className = 'text-muted'
         td.textContent = '暂无端点'
@@ -1720,39 +1623,40 @@ function buildAdminEndpointHtml(basePath: string): string {
         return
       }
 
-      endpointState.endpoints.forEach((item) => {
-        const tr = document.createElement('tr')
-        const visitUrl = BASE_PATH + '/' + encodeURIComponent(item.name || '')
+      endpointState.endpoints.forEach(function(item) {
+        var tr = document.createElement('tr')
+        var visitUrl = BASE_PATH + '/' + encodeURIComponent(item.name || '')
 
         tr.innerHTML =
           '<td class="code-text"></td>' +
           '<td></td>' +
           '<td class="code-text"></td>' +
-          '<td class="code-text"></td>' +
+          '<td></td>' +
           '<td></td>'
 
-        const link = document.createElement('a')
-        link.href = visitUrl
-        link.target = '_blank'
-        link.className = 'text-decoration-none'
-        link.textContent = '/' + (item.name || '')
-        tr.children[0].appendChild(link)
+        tr.children[0].textContent = item.name || ''
         tr.children[1].textContent = item.description || '-'
-        tr.children[2].textContent = (item.method || 'redirect') + ' · ' + (item.urlConstruction || 'normal')
-        tr.children[3].textContent = item.url || ''
+        tr.children[2].textContent = item.url || ''
 
-        const actionWrap = document.createElement('div')
+        var visitLink = document.createElement('a')
+        visitLink.href = visitUrl
+        visitLink.target = '_blank'
+        visitLink.className = 'btn btn-sm btn-outline-secondary'
+        visitLink.innerHTML = '<i class="bi bi-box-arrow-up-right"></i>'
+        tr.children[3].appendChild(visitLink)
+
+        var actionWrap = document.createElement('div')
         actionWrap.className = 'd-flex gap-1 justify-content-end'
 
-        const editBtn = document.createElement('button')
+        var editBtn = document.createElement('button')
         editBtn.className = 'btn btn-sm btn-outline-primary'
         editBtn.textContent = '编辑'
-        editBtn.addEventListener('click', () => fillForm(item))
+        editBtn.addEventListener('click', function() { fillForm(item) })
 
-        const delBtn = document.createElement('button')
+        var delBtn = document.createElement('button')
         delBtn.className = 'btn btn-sm btn-outline-danger'
         delBtn.textContent = '删除'
-        delBtn.addEventListener('click', async () => {
+        delBtn.addEventListener('click', async function() {
           await request(BASE_PATH + '/api/admin/endpoints/' + encodeURIComponent(item.name || ''), {
             method: 'DELETE',
           })
@@ -1769,50 +1673,28 @@ function buildAdminEndpointHtml(basePath: string): string {
     }
 
     async function loadEndpoints() {
-      const data = await request(BASE_PATH + '/api/admin/endpoints')
+      var data = await request(BASE_PATH + '/api/admin/endpoints')
       endpointState.endpoints = Array.isArray(data.endpoints) ? data.endpoints : []
       renderTable()
     }
 
-    byId('save-endpoint').addEventListener('click', async () => {
-      const name = byId('endpoint-name').value.trim()
-      const url = byId('endpoint-url').value.trim()
+    byId('save-endpoint').addEventListener('click', async function() {
+      var name = byId('endpoint-name').value.trim()
+      var url = byId('endpoint-url').value.trim()
       if (!name || !url) {
-        showAlert('name 与 url 必填', 'warning')
+        showAlert('名称与目标 URL 必填', 'warning')
         return
       }
 
-      let queryParams = []
-      let proxySettings = {}
-
-      try {
-        queryParams = byId('endpoint-query').value.trim()
-          ? JSON.parse(byId('endpoint-query').value)
-          : []
-      } catch {
-        showAlert('queryParams JSON 格式错误', 'warning')
-        return
-      }
-
-      try {
-        proxySettings = byId('endpoint-proxy').value.trim()
-          ? JSON.parse(byId('endpoint-proxy').value)
-          : {}
-      } catch {
-        showAlert('proxySettings JSON 格式错误', 'warning')
-        return
-      }
-
-      const payload = {
-        name,
+      var payload = {
+        name: name,
         description: byId('endpoint-description').value.trim(),
-        url,
-        group: byId('endpoint-group').value.trim(),
-        method: byId('endpoint-method').value,
-        urlConstruction: byId('endpoint-mode').value,
-        modelName: byId('endpoint-model').value.trim(),
-        queryParams,
-        proxySettings,
+        url: url,
+        method: 'redirect',
+        urlConstruction: 'normal',
+        modelName: '',
+        queryParams: [],
+        proxySettings: { fallbackAction: 'returnJson' },
       }
 
       if (endpointState.editingName) {
@@ -1835,7 +1717,7 @@ function buildAdminEndpointHtml(basePath: string): string {
 
     byId('reset-endpoint').addEventListener('click', resetForm)
 
-    loadEndpoints().catch((error) => {
+    loadEndpoints().catch(function(error) {
       showAlert(error instanceof Error ? error.message : String(error), 'danger')
     })
   </script>
@@ -2002,9 +1884,11 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     }
   })
 
-  ctx.server.get(`${basePath}/api/admin/state`, async (koa) => {
-    koa.body = await buildAdminState(service)
-  })
+    ctx.server.get(`${basePath}/api/admin/state`, async (koa) => {
+      const state = await buildAdminState(service)
+      console.log('Admin State:', JSON.stringify(state, null, 2))
+      koa.body = state
+    })
 
   ctx.server.post(`${basePath}/api/admin/collections`, async (koa) => {
     const body = getRequestBody(koa)
