@@ -5,28 +5,9 @@ import type {} from 'koishi-plugin-chatluna'
 
 import { Context } from 'koishi'
 import { Config, ProxySettings, QueryParamConfig } from './config'
-import { MemesLunaService } from './service'
-
-const RESERVED_PATHS = new Set([
-  'config',
-  'admin',
-  'admin-login',
-  'admin-logout',
-  'api',
-  'css',
-  'js',
-  'picture',
-  'view',
-  'project_bg',
-  'static',
-  'favicon.ico',
-])
+import { MemesLunaService, isReservedPath } from './service'
 
 const IMAGE_URL_REGEXP = /\.(jpeg|jpg|gif|png|webp|bmp|svg)(\?.*)?$/i
-
-function isReservedPath(name: string): boolean {
-  return RESERVED_PATHS.has(name) || name.includes('.')
-}
 
 function getValueByDotNotation(obj: unknown, dotPath?: string): unknown {
   if (!dotPath) return undefined
@@ -489,12 +470,7 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
     })
   )
 
-  consoleService.addListener(
-    'memesluna/uploadLocalImage',
-    withReady(async (collectionName: string, imageBase64: string, originalName?: string) => {
-      return await service.addLocalImageBase64(collectionName, imageBase64, originalName)
-    })
-  )
+
 
   consoleService.addListener(
     'memesluna/deleteLocalImage',

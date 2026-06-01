@@ -20,11 +20,29 @@ const IMAGE_EXTENSIONS = new Set([
   '.svg',
   '.tif',
   '.tiff',
-  '.avif',
   '.psd',
 ])
 
-const COLLECTION_NAME_REGEXP = /^[a-zA-Z0-9_-]+$/
+const RESERVED_PATHS = new Set([
+  'config',
+  'admin',
+  'admin-login',
+  'admin-logout',
+  'api',
+  'css',
+  'js',
+  'picture',
+  'view',
+  'project_bg',
+  'static',
+  'favicon.ico',
+])
+
+export function isReservedPath(name: string): boolean {
+  return RESERVED_PATHS.has(name) || name.includes('.')
+}
+
+const COLLECTION_NAME_REGEXP = /^[^\/\\?%*:|"<>.]+$/
 const ENDPOINT_NAME_REGEXP = /^[a-zA-Z0-9_-]+$/
 
 export interface ApiEndpoint {
@@ -140,8 +158,12 @@ export class MemesLunaService extends Service {
     await fs.mkdir(this.getStorageRoot(), { recursive: true })
   }
 
+  private isValidCollectionName(name: string): boolean {
+    return !!name && COLLECTION_NAME_REGEXP.test(name) && !isReservedPath(name)
+  }
+
   private ensureCollectionName(name: string) {
-    if (!name || !COLLECTION_NAME_REGEXP.test(name)) {
+    if (!this.isValidCollectionName(name)) {
       throw new Error('Invalid collection name: only letters, numbers, _ and - are allowed.')
     }
   }
@@ -149,6 +171,9 @@ export class MemesLunaService extends Service {
   private ensureEndpointName(name: string) {
     if (!name || !ENDPOINT_NAME_REGEXP.test(name)) {
       throw new Error('Invalid endpoint name: only letters, numbers, _ and - are allowed.')
+    }
+    if (isReservedPath(name)) {
+      throw new Error('Endpoint name is a reserved path.')
     }
   }
 
@@ -165,6 +190,9 @@ export class MemesLunaService extends Service {
   }
 
   async getCollectionDescription(collectionName: string): Promise<string> {
+    if (!this.isValidCollectionName(collectionName)) {
+      return ''
+    }
     try {
       return (await fs.readFile(this.getCollectionDescriptionFile(collectionName), 'utf8')).trim()
     } catch {
@@ -173,6 +201,7 @@ export class MemesLunaService extends Service {
   }
 
   async setCollectionDescription(collectionName: string, description: string): Promise<boolean> {
+    this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       return false
     }
@@ -181,6 +210,9 @@ export class MemesLunaService extends Service {
   }
 
   async collectionExists(collectionName: string): Promise<boolean> {
+    if (!this.isValidCollectionName(collectionName)) {
+      return false
+    }
     const dir = this.getCollectionDir(collectionName)
     try {
       const stat = await fs.stat(dir)
@@ -194,7 +226,10 @@ export class MemesLunaService extends Service {
     const root = this.getStorageRoot()
     try {
       const entries = await fs.readdir(root, { withFileTypes: true })
-      return entries.filter((e) => e.isDirectory()).map((e) => e.name).sort()
+      return entries
+        .filter((e) => e.isDirectory() && this.isValidCollectionName(e.name))
+        .map((e) => e.name)
+        .sort()
     } catch {
       return []
     }
@@ -248,7 +283,6 @@ export class MemesLunaService extends Service {
     if (ext === '.webp') return 'image/webp'
     if (ext === '.bmp') return 'image/bmp'
     if (ext === '.svg') return 'image/svg+xml'
-    if (ext === '.avif') return 'image/avif'
     if (ext === '.tif' || ext === '.tiff') return 'image/tiff'
     return 'image/jpeg'
   }
@@ -285,6 +319,9 @@ export class MemesLunaService extends Service {
   }
 
   async getCollectionImages(collectionName: string): Promise<string[]> {
+    if (!this.isValidCollectionName(collectionName)) {
+      return []
+    }
     if (!(await this.collectionExists(collectionName))) {
       return []
     }
@@ -298,6 +335,9 @@ export class MemesLunaService extends Service {
   }
 
   async getCollectionLinks(collectionName: string): Promise<string[]> {
+    if (!this.isValidCollectionName(collectionName)) {
+      return []
+    }
     if (!(await this.collectionExists(collectionName))) {
       return []
     }
@@ -315,6 +355,7 @@ export class MemesLunaService extends Service {
   }
 
   async addLinksToCollection(collectionName: string, links: string[]): Promise<number> {
+    this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       throw new Error(`Collection not found: ${collectionName}`)
     }
@@ -341,6 +382,7 @@ export class MemesLunaService extends Service {
   }
 
   async removeLinkFromCollection(collectionName: string, link: string): Promise<boolean> {
+    this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       return false
     }
@@ -378,16 +420,14 @@ export class MemesLunaService extends Service {
   }
 
   private buildSafeFilename(originalName: string | undefined, extHint: string | undefined): string {
-    const fallbackName = `${Date.now()}-${Math.floor(Math.random() * 10000)}`
-    const src = (originalName ?? fallbackName).trim()
+    const numericName = `${Date.now()}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`
+    const src = (originalName ?? '').trim()
     const parsed = path.parse(src)
-    const sanitizedBase = (parsed.name || fallbackName).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64)
-
     const rawExt = (parsed.ext || (extHint ? `.${extHint}` : '') || '.png').toLowerCase()
     const normalizedExt = rawExt === '.jpeg' ? '.jpg' : rawExt
     const finalExt = IMAGE_EXTENSIONS.has(normalizedExt) ? normalizedExt : '.png'
 
-    return `${sanitizedBase}${finalExt}`
+    return `${numericName}${finalExt}`
   }
 
   private async deduplicateFilename(collectionDir: string, filename: string): Promise<string> {
@@ -411,6 +451,7 @@ export class MemesLunaService extends Service {
     base64Data: string,
     originalName?: string
   ): Promise<string> {
+    this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       throw new Error(`Collection not found: ${collectionName}`)
     }
@@ -429,6 +470,7 @@ export class MemesLunaService extends Service {
   }
 
   async deleteImageFromCollection(collectionName: string, filename: string): Promise<boolean> {
+    this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       return false
     }
@@ -454,6 +496,8 @@ export class MemesLunaService extends Service {
     targetCollection: string,
     filename: string
   ): Promise<string | null> {
+    this.ensureCollectionName(sourceCollection)
+    this.ensureCollectionName(targetCollection)
     if (!(await this.collectionExists(sourceCollection)) || !(await this.collectionExists(targetCollection))) {
       return null
     }
@@ -479,6 +523,9 @@ export class MemesLunaService extends Service {
   }
 
   async getCollectionInfo(collectionName: string): Promise<CollectionInfo | null> {
+    if (!this.isValidCollectionName(collectionName)) {
+      return null
+    }
     if (!(await this.collectionExists(collectionName))) {
       return null
     }
@@ -499,6 +546,9 @@ export class MemesLunaService extends Service {
   }
 
   async getRandomResource(collectionName: string): Promise<CollectionResource | null> {
+    if (!this.isValidCollectionName(collectionName)) {
+      return null
+    }
     if (!(await this.collectionExists(collectionName))) {
       return null
     }
