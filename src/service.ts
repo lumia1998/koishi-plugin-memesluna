@@ -83,8 +83,10 @@ export interface CollectionInfo {
 }
 
 export interface CollectionResource {
-  type: 'local' | 'external'
+  type: 'local' | 'external' | 'storage'
+  filename?: string
   value: string
+  public_url?: string
 }
 
 interface MemesLunaEndpointRow {
@@ -148,14 +150,140 @@ export class MemesLunaService extends Service {
         unique: ['name'],
       }
     )
+
+    this.ctx.database.extend(
+      'memesluna_images',
+      {
+        id: 'string',
+        collection: 'string',
+        index: 'integer',
+        filename: 'string',
+        type: 'string',
+        value: 'string',
+        public_url: 'string',
+        mime: 'string',
+        created_at: 'timestamp',
+      },
+      {
+        primary: 'id',
+        unique: [['collection', 'index']],
+      }
+    )
   }
 
   private getStorageRoot() {
     return path.resolve(this.ctx.baseDir, this.config.storagePath)
   }
 
+  private getStorageBackend() {
+    if (this.ctx.chatluna_storage && (this.ctx.chatluna_storage as any).storageBackend) {
+      const backend = (this.ctx.chatluna_storage as any).storageBackend
+      if (backend.type !== 'local') {
+        return backend
+      }
+    }
+    return null
+  }
+
+  private async syncExistingFilesToDatabase() {
+    const root = this.getStorageRoot()
+    let folders: string[] = []
+    try {
+      const entries = await fs.readdir(root, { withFileTypes: true })
+      folders = entries.filter((e) => e.isDirectory() && this.isValidCollectionName(e.name)).map((e) => e.name)
+    } catch {
+      return
+    }
+
+    for (const colName of folders) {
+      const colDir = this.getCollectionDir(colName)
+      let files: string[] = []
+      try {
+        const entries = await fs.readdir(colDir, { withFileTypes: true })
+        files = entries.filter((e) => e.isFile() && this.isImageFile(e.name)).map((e) => e.name)
+      } catch {
+        continue
+      }
+
+      // Sync local files
+      for (const filename of files) {
+        const ext = path.extname(filename).toLowerCase()
+        const basename = path.basename(filename, ext)
+        let index = parseInt(basename, 10)
+
+        // Check if filename is not pure sequential number
+        if (isNaN(index) || String(index) !== basename || index < 1 || index > 99999) {
+          const maxImg = await this.ctx.database.get('memesluna_images', { collection: colName }, { limit: 1, sort: { index: 'desc' } })
+          index = maxImg.length ? maxImg[0].index + 1 : 1
+          const newFilename = `${index}${ext}`
+          const oldPath = path.join(colDir, filename)
+          const newPath = path.join(colDir, newFilename)
+          try {
+            await fs.rename(oldPath, newPath)
+            await this.ctx.database.create('memesluna_images', {
+              id: randomUUID(),
+              collection: colName,
+              index,
+              filename: newFilename,
+              type: 'local',
+              value: newFilename,
+              mime: this.getMimeByFilename(newFilename),
+              created_at: new Date(),
+            })
+          } catch {}
+        } else {
+          // Check if already registered
+          const existing = await this.ctx.database.get('memesluna_images', { collection: colName, index })
+          if (!existing.length) {
+            await this.ctx.database.create('memesluna_images', {
+              id: randomUUID(),
+              collection: colName,
+              index,
+              filename,
+              type: 'local',
+              value: filename,
+              mime: this.getMimeByFilename(filename),
+              created_at: new Date(),
+            })
+          }
+        }
+      }
+
+      // Sync links file
+      const linksFile = this.getCollectionLinksFile(colName)
+      try {
+        const text = await fs.readFile(linksFile, 'utf8')
+        const links = text
+          .split(/\r?\n/g)
+          .map((line) => line.trim())
+          .filter((line) => line.startsWith('http://') || line.startsWith('https://'))
+
+        for (const link of links) {
+          const existing = await this.ctx.database.get('memesluna_images', { collection: colName, value: link, type: 'external' })
+          if (!existing.length) {
+            const maxImg = await this.ctx.database.get('memesluna_images', { collection: colName }, { limit: 1, sort: { index: 'desc' } })
+            const index = maxImg.length ? maxImg[0].index + 1 : 1
+            await this.ctx.database.create('memesluna_images', {
+              id: randomUUID(),
+              collection: colName,
+              index,
+              filename: `link_${index}`,
+              type: 'external',
+              value: link,
+              mime: 'image/jpeg',
+              created_at: new Date(),
+            })
+          }
+        }
+        // Cleanup migrated links file so we don't scan it repeatedly
+        await fs.rm(linksFile, { force: true })
+      } catch {}
+    }
+  }
+
   private async ensureStorage() {
     await fs.mkdir(this.getStorageRoot(), { recursive: true })
+    await this.syncExistingFilesToDatabase()
   }
 
   private isValidCollectionName(name: string): boolean {
@@ -300,9 +428,37 @@ export class MemesLunaService extends Service {
       return null
     }
 
+    const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName, filename })
+    if (!rows.length) {
+      return null
+    }
+
+    const image = rows[0]
+    if (image.type === 'storage') {
+      const backend = this.getStorageBackend()
+      if (backend) {
+        try {
+          const buffer = await backend.download(image.value)
+          return { buffer, mime: image.mime }
+        } catch {
+          return null
+        }
+      }
+    }
+
+    if (image.type === 'external') {
+      try {
+        const buffer = await this.ctx.http.get<ArrayBuffer>(image.value, { responseType: 'arraybuffer' })
+        return { buffer: Buffer.from(buffer), mime: image.mime }
+      } catch {
+        return null
+      }
+    }
+
+    // local
     let fullPath: string
     try {
-      fullPath = this.resolveLocalImagePath(collectionName, filename)
+      fullPath = this.resolveLocalImagePath(collectionName, image.value)
     } catch {
       return null
     }
@@ -311,7 +467,7 @@ export class MemesLunaService extends Service {
       const buffer = await fs.readFile(fullPath)
       return {
         buffer,
-        mime: this.getMimeByFilename(fullPath),
+        mime: image.mime,
       }
     } catch {
       return null
@@ -326,12 +482,8 @@ export class MemesLunaService extends Service {
       return []
     }
 
-    const dir = this.getCollectionDir(collectionName)
-    const entries = await fs.readdir(dir, { withFileTypes: true })
-    return entries
-      .filter((entry) => entry.isFile() && this.isImageFile(entry.name))
-      .map((entry) => entry.name)
-      .sort()
+    const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName, type: ['local', 'storage'] })
+    return rows.map((img) => img.filename).sort()
   }
 
   async getCollectionLinks(collectionName: string): Promise<string[]> {
@@ -342,16 +494,8 @@ export class MemesLunaService extends Service {
       return []
     }
 
-    const linksPath = this.getCollectionLinksFile(collectionName)
-    try {
-      const text = await fs.readFile(linksPath, 'utf8')
-      return text
-        .split(/\r?\n/g)
-        .map((line) => line.trim())
-        .filter((line) => line.startsWith('http://') || line.startsWith('https://'))
-    } catch {
-      return []
-    }
+    const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName, type: 'external' })
+    return rows.map((img) => img.value)
   }
 
   async addLinksToCollection(collectionName: string, links: string[]): Promise<number> {
@@ -368,17 +512,26 @@ export class MemesLunaService extends Service {
       return 0
     }
 
-    const current = await this.getCollectionLinks(collectionName)
-    const merged = [...current]
+    let addedCount = 0
     for (const link of normalized) {
-      if (!merged.includes(link)) {
-        merged.push(link)
+      const existing = await this.ctx.database.get('memesluna_images', { collection: collectionName, value: link, type: 'external' })
+      if (!existing.length) {
+        const maxImg = await this.ctx.database.get('memesluna_images', { collection: collectionName }, { limit: 1, sort: { index: 'desc' } })
+        const index = maxImg.length ? maxImg[0].index + 1 : 1
+        await this.ctx.database.create('memesluna_images', {
+          id: randomUUID(),
+          collection: collectionName,
+          index,
+          filename: `link_${index}`,
+          type: 'external',
+          value: link,
+          mime: 'image/jpeg',
+          created_at: new Date(),
+        })
+        addedCount++
       }
     }
-
-    const linksPath = this.getCollectionLinksFile(collectionName)
-    await fs.writeFile(linksPath, `${merged.join('\n')}${merged.length ? '\n' : ''}`, 'utf8')
-    return merged.length - current.length
+    return addedCount
   }
 
   async removeLinkFromCollection(collectionName: string, link: string): Promise<boolean> {
@@ -387,14 +540,12 @@ export class MemesLunaService extends Service {
       return false
     }
 
-    const current = await this.getCollectionLinks(collectionName)
-    const next = current.filter((item) => item !== link)
-    if (next.length === current.length) {
+    const existing = await this.ctx.database.get('memesluna_images', { collection: collectionName, value: link, type: 'external' })
+    if (!existing.length) {
       return false
     }
 
-    const linksPath = this.getCollectionLinksFile(collectionName)
-    await fs.writeFile(linksPath, `${next.join('\n')}${next.length ? '\n' : ''}`, 'utf8')
+    await this.ctx.database.remove('memesluna_images', { collection: collectionName, value: link, type: 'external' })
     return true
   }
 
@@ -462,10 +613,48 @@ export class MemesLunaService extends Service {
       throw new Error('Invalid image base64 payload')
     }
 
-    const dir = this.getCollectionDir(collectionName)
-    const initialName = this.buildSafeFilename(originalName, extHint)
-    const finalName = await this.deduplicateFilename(dir, initialName)
-    await fs.writeFile(path.join(dir, finalName), buffer)
+    // Determine the next index
+    const maxImg = await this.ctx.database.get('memesluna_images', { collection: collectionName }, { limit: 1, sort: { index: 'desc' } })
+    const index = maxImg.length ? maxImg[0].index + 1 : 1
+
+    const rawExt = (path.parse(originalName ?? '').ext || (extHint ? `.${extHint}` : '') || '.png').toLowerCase()
+    const finalExt = rawExt === '.jpeg' ? '.jpg' : rawExt
+    if (!IMAGE_EXTENSIONS.has(finalExt)) {
+      throw new Error('Unsupported image format')
+    }
+    const finalName = `${index}${finalExt}`
+
+    const backend = this.getStorageBackend()
+    if (backend) {
+      // S3/WebDAV upload
+      const result = await backend.upload(buffer, finalName)
+      await this.ctx.database.create('memesluna_images', {
+        id: randomUUID(),
+        collection: collectionName,
+        index,
+        filename: finalName,
+        type: 'storage',
+        value: result.key,
+        public_url: result.publicUrl || '',
+        mime: this.getMimeByFilename(finalName),
+        created_at: new Date(),
+      })
+    } else {
+      // Local upload
+      const dir = this.getCollectionDir(collectionName)
+      await fs.writeFile(path.join(dir, finalName), buffer)
+      await this.ctx.database.create('memesluna_images', {
+        id: randomUUID(),
+        collection: collectionName,
+        index,
+        filename: finalName,
+        type: 'local',
+        value: finalName,
+        mime: this.getMimeByFilename(finalName),
+        created_at: new Date(),
+      })
+    }
+
     return finalName
   }
 
@@ -482,13 +671,28 @@ export class MemesLunaService extends Service {
       return false
     }
 
-    const fullPath = path.join(this.getCollectionDir(collectionName), safeName)
-    try {
-      await fs.unlink(fullPath)
-      return true
-    } catch {
+    const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName, filename: safeName })
+    if (!rows.length) {
       return false
     }
+
+    const image = rows[0]
+    if (image.type === 'storage') {
+      const backend = this.getStorageBackend()
+      if (backend) {
+        try {
+          await backend.delete(image.value)
+        } catch {}
+      }
+    } else if (image.type === 'local') {
+      const fullPath = path.join(this.getCollectionDir(collectionName), safeName)
+      try {
+        await fs.unlink(fullPath)
+      } catch {}
+    }
+
+    await this.ctx.database.remove('memesluna_images', { id: image.id })
+    return true
   }
 
   async moveImageToCollection(
@@ -509,17 +713,57 @@ export class MemesLunaService extends Service {
       return null
     }
 
-    const sourcePath = path.join(this.getCollectionDir(sourceCollection), safeName)
-    const targetDir = this.getCollectionDir(targetCollection)
-    const targetName = await this.deduplicateFilename(targetDir, safeName)
-    const targetPath = path.join(targetDir, targetName)
-
-    try {
-      await fs.rename(sourcePath, targetPath)
-      return targetName
-    } catch {
+    const rows = await this.ctx.database.get('memesluna_images', { collection: sourceCollection, filename: safeName })
+    if (!rows.length) {
       return null
     }
+
+    const image = rows[0]
+
+    // Determine the next index in target
+    const maxImg = await this.ctx.database.get('memesluna_images', { collection: targetCollection }, { limit: 1, sort: { index: 'desc' } })
+    const targetIndex = maxImg.length ? maxImg[0].index + 1 : 1
+    const ext = path.extname(safeName).toLowerCase()
+    const targetFilename = `${targetIndex}${ext}`
+
+    if (image.type === 'storage') {
+      const backend = this.getStorageBackend()
+      if (backend) {
+        try {
+          const buffer = await backend.download(image.value)
+          await backend.delete(image.value)
+          const result = await backend.upload(buffer, targetFilename)
+          await this.ctx.database.set('memesluna_images', { id: image.id }, {
+            collection: targetCollection,
+            index: targetIndex,
+            filename: targetFilename,
+            value: result.key,
+            public_url: result.publicUrl || '',
+          })
+          return targetFilename
+        } catch {
+          return null
+        }
+      }
+    } else if (image.type === 'local') {
+      const sourcePath = path.join(this.getCollectionDir(sourceCollection), safeName)
+      const targetDir = this.getCollectionDir(targetCollection)
+      const targetPath = path.join(targetDir, targetFilename)
+      try {
+        await fs.rename(sourcePath, targetPath)
+        await this.ctx.database.set('memesluna_images', { id: image.id }, {
+          collection: targetCollection,
+          index: targetIndex,
+          filename: targetFilename,
+          value: targetFilename,
+        })
+        return targetFilename
+      } catch {
+        return null
+      }
+    }
+
+    return null
   }
 
   async getCollectionInfo(collectionName: string): Promise<CollectionInfo | null> {
@@ -553,21 +797,34 @@ export class MemesLunaService extends Service {
       return null
     }
 
-    const localImages = await this.getCollectionImages(collectionName)
-    const links = await this.getCollectionLinks(collectionName)
-    const pool: CollectionResource[] = [
-      ...localImages.map((name) => ({
-        type: 'local' as const,
-        value: path.join(this.getCollectionDir(collectionName), name),
-      })),
-      ...links.map((link) => ({ type: 'external' as const, value: link })),
-    ]
-
-    if (!pool.length) {
+    const count = (await this.ctx.database.get('memesluna_images', { collection: collectionName }, ['id'])).length
+    if (count === 0) {
       return null
     }
 
-    return pool[Math.floor(Math.random() * pool.length)]
+    const offset = Math.floor(Math.random() * count)
+    const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName }, { limit: 1, offset })
+    if (!rows.length) {
+      return null
+    }
+
+    const image = rows[0]
+    if (image.type === 'external') {
+      return { type: 'external', value: image.value }
+    } else if (image.type === 'storage') {
+      return {
+        type: 'storage',
+        filename: image.filename,
+        value: image.value,
+        public_url: image.public_url,
+      }
+    } else {
+      return {
+        type: 'local',
+        filename: image.filename,
+        value: path.join(this.getCollectionDir(collectionName), image.filename),
+      }
+    }
   }
 
   private parseJsonField<T>(value: string | null | undefined, fallback: T): T {
@@ -682,14 +939,14 @@ export class MemesLunaService extends Service {
         .join('&')
       const suffix = queryPart ? `?${queryPart}` : ''
       const desc = endpoint.description || endpoint.name
-      lines.push(`- ${endpoint.name} ${desc} ${backendPath}/${endpoint.name}${suffix}`)
+      lines.push(`- 端点名: ${endpoint.name} | 描述: ${desc} | 接口地址: ${backendPath}/${endpoint.name}${suffix}`)
     }
 
     for (const collection of collections) {
       const info = await this.getCollectionInfo(collection)
       if (info?.hasContent) {
         const desc = info.description || collection
-        lines.push(`- ${collection} ${desc} ${backendPath}/${collection}`)
+        lines.push(`- 合集名: ${collection} | 描述: ${desc} | 随机端点: ${backendPath}/${collection}`)
       }
     }
 
@@ -700,6 +957,7 @@ export class MemesLunaService extends Service {
 declare module 'koishi' {
   interface Context {
     memesluna: MemesLunaService
+    chatluna_storage: any
   }
 
   interface Tables {
@@ -716,6 +974,17 @@ declare module 'koishi' {
       proxy_settings: string
       created_at: Date
       updated_at: Date
+    }
+    memesluna_images: {
+      id: string
+      collection: string
+      index: number
+      filename: string
+      type: string
+      value: string
+      public_url: string
+      mime: string
+      created_at: Date
     }
   }
 }

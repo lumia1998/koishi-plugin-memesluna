@@ -3,7 +3,7 @@ import path from 'path'
 import type {} from '@koishijs/plugin-console'
 import type {} from 'koishi-plugin-chatluna'
 
-import { Context } from 'koishi'
+import { Context, h } from 'koishi'
 import { Config, ProxySettings, QueryParamConfig } from './config'
 import { MemesLunaService, isReservedPath } from './service'
 
@@ -142,6 +142,42 @@ async function handleProxyRequest(targetUrl: string, proxySettings: ProxySetting
       contentType: 'application/json',
     }
   }
+}
+
+async function downloadImage(ctx: Context, url: string): Promise<Buffer> {
+  let lastError: Error | null = null
+  for (let i = 0; i < 3; i++) {
+    try {
+      const data = await ctx.http.get<ArrayBuffer>(url, {
+        responseType: 'arraybuffer',
+        timeout: 10000,
+      })
+      return Buffer.from(data)
+    } catch (err) {
+      lastError = err as Error
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+    }
+  }
+  throw new Error(`Failed to download image after 3 retries: ${lastError?.message}`)
+}
+
+function getExtFromMagicBytes(buffer: Buffer): string | null {
+  if (buffer.length >= 8 && buffer.readUInt32BE(0) === 0x89504E47 && buffer.readUInt32BE(4) === 0x0D0A1A0A) {
+    return '.png'
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
+    return '.jpg'
+  }
+  if (buffer.length >= 4 && buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
+    return '.gif'
+  }
+  if (buffer.length >= 2 && buffer[0] === 0x42 && buffer[1] === 0x4D) {
+    return '.bmp'
+  }
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') {
+    return '.webp'
+  }
+  return null
 }
 
 function toAbsoluteBaseUrl(ctx: Context, config: Config): string {
@@ -284,15 +320,33 @@ async function applyDynamicForward(
     return { notFound: true }
   }
 
-  if (resource.type === 'external') {
-    return { redirectTo: resource.value }
-  }
+  const method = endpoint ? endpoint.method : 'redirect'
 
-  const fileBuffer = await fs.readFile(resource.value)
-  return {
-    status: 200,
-    body: fileBuffer,
-    contentType: guessMimeByExt(resource.value),
+  if (method === 'redirect') {
+    if (resource.type === 'external') {
+      return { redirectTo: resource.value }
+    }
+    if (resource.type === 'storage') {
+      if (resource.public_url) {
+        return { redirectTo: resource.public_url }
+      }
+      const localUrl = `${toAbsoluteBaseUrl(ctx, config)}${config.backendPath}/api/admin/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
+      return { redirectTo: localUrl }
+    }
+    // local file
+    const localUrl = `${toAbsoluteBaseUrl(ctx, config)}${config.backendPath}/api/admin/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
+    return { redirectTo: localUrl }
+  } else {
+    // proxy mode
+    const img = await service.getLocalImageBuffer(routeName, resource.filename || '')
+    if (!img) {
+      return { notFound: true }
+    }
+    return {
+      status: 200,
+      body: img.buffer,
+      contentType: img.mime,
+    }
   }
 }
 
@@ -873,40 +927,123 @@ export function apply(ctx: Context, config: Config) {
     applyConsole(ctx, config, service)
   })
 
-  ctx.inject(['memesluna'], (ctx) => {
-    const root = ctx.command('memesluna', 'MemesLuna 命令')
+  const root = ctx.command('memesluna', 'MemesLuna 命令')
 
-    root
-      .subcommand('.list', '查看当前可用表情路由')
-      .action(async () => {
-        const service = ctx.memesluna
-        await service.ready
+  root
+    .subcommand('.list', '查看当前可用表情路由')
+    .action(async () => {
+      const service = ctx.memesluna
+      await service.ready
 
-        const [collectionNames, endpoints] = await Promise.all([
-          service.getCollections(),
-          service.getEndpoints(),
-        ])
+      const [collectionNames, endpoints] = await Promise.all([
+        service.getCollections(),
+        service.getEndpoints(),
+      ])
 
-        const lines: string[] = []
+      const lines: string[] = []
 
-        for (const collectionName of collectionNames) {
-          const info = await service.getCollectionInfo(collectionName)
-          if (!info?.hasContent) continue
-          lines.push(`${collectionName} ${collectionName}表情包`)
+      for (const collectionName of collectionNames) {
+        const info = await service.getCollectionInfo(collectionName)
+        if (!info?.hasContent) continue
+        lines.push(`${collectionName} ${collectionName}表情包`)
+      }
+
+      for (const endpoint of endpoints) {
+        const endpointLabel = endpoint.description || `${endpoint.name}端点`
+        lines.push(`${endpoint.name} ${endpointLabel}`)
+      }
+
+      if (!lines.length) {
+        return '暂无可用表情路由'
+      }
+
+      return lines.join('\n')
+    })
+
+  root
+    .subcommand('.add <name:string> [description:string]', '快速创建表情图图床合集')
+    .alias('.create')
+    .alias('.creat')
+    .action(async ({ session }, name, description) => {
+      if (!name) return '请输入合集名称，例如: memesluna.add cool_emojis'
+      const service = ctx.memesluna
+      await service.ready
+      try {
+        const created = await service.createCollection(name)
+        if (!created) {
+          return `合集 "${name}" 已存在。`
+        }
+        if (description) {
+          await service.setCollectionDescription(name, description)
+        }
+        return `合集 "${name}" 创建成功！${description ? `描述为: ${description}` : ''}`
+      } catch (err) {
+        return `创建合集失败: ${(err as Error).message}`
+      }
+    })
+
+  const stoleAction = async (session: any, name: string) => {
+    if (!session) return
+    if (!name) {
+      return '使用方式：引用图片并回复 "偷了 [合集名称]" 或 "memesluna stole [合集名称]"'
+    }
+
+    const service = ctx.memesluna
+    await service.ready
+
+    try {
+      if (!(await service.collectionExists(name))) {
+        await service.createCollection(name)
+      }
+    } catch (err) {
+      return `检查/创建合集失败: ${(err as Error).message}`
+    }
+
+    let imageUrls: string[] = []
+    if (session.quote) {
+      const images = h.select(session.quote.content, 'image')
+      imageUrls = images.map((img) => img.attrs.url || img.attrs.src).filter(Boolean)
+    } else {
+      const images = h.select(session.elements || [], 'image')
+      imageUrls = images.map((img) => img.attrs.url || img.attrs.src).filter(Boolean)
+    }
+
+    if (!imageUrls.length) {
+      return '没有找到要偷的图片。请引用包含图片的聊天记录，或者在发送图片的同时回复 "偷了 [合集名称]"'
+    }
+
+    let successCount = 0
+    const savedFilenames: string[] = []
+
+    for (const url of imageUrls) {
+      try {
+        const buffer = await downloadImage(ctx, url)
+        const ext = getExtFromMagicBytes(buffer)
+        if (!ext) {
+          return '图片格式不兼容，仅支持 JPG/PNG/GIF/WEBP/BMP 格式图片（已拒绝 AVIF）'
         }
 
-        for (const endpoint of endpoints) {
-          const endpointLabel = endpoint.description || `${endpoint.name}端点`
-          lines.push(`${endpoint.name} ${endpointLabel}`)
-        }
+        const base64 = buffer.toString('base64')
+        const filename = await service.addLocalImageBase64(name, base64, `stole${ext}`)
+        savedFilenames.push(filename)
+        successCount++
+      } catch (err) {
+        ctx.logger('memesluna').error(`Failed to steal image from URL: ${url}`, err)
+      }
+    }
 
-        if (!lines.length) {
-          return '暂无可用表情路由'
-        }
+    if (successCount === 0) {
+      return '偷表情包失败，下载图片或上传保存时发生错误。'
+    }
 
-        return lines.join('\n')
-      })
-  })
+    return `成功偷了 ${successCount} 张表情包存入合集 "${name}"！新文件名：${savedFilenames.join(', ')}`
+  }
+
+  root
+    .subcommand('.stole <name:string>', '偷取引用消息中的图片并存入指定合集')
+    .action(async ({ session }, name) => {
+      return await stoleAction(session, name)
+    })
 
   if (config.injectVariables) {
     ctx.inject(['memesluna', 'chatluna', 'server'], async (ctx) => {
