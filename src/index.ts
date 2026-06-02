@@ -961,31 +961,31 @@ export function apply(ctx: Context, config: Config) {
     })
 
   root
-    .subcommand('.add <name:string> [description:string]', '快速创建表情图图床合集')
+    .subcommand('.add <name:string> [description:string]', '快速创建表情包')
     .alias('.create')
     .alias('.creat')
     .action(async ({ session }, name, description) => {
-      if (!name) return '请输入合集名称，例如: memesluna.add cool_emojis'
+      if (!name) return '请输入表情包名称，例如: memesluna.add cool_emojis'
       const service = ctx.memesluna
       await service.ready
       try {
         const created = await service.createCollection(name)
         if (!created) {
-          return `合集 "${name}" 已存在。`
+          return `表情包 "${name}" 已存在。`
         }
         if (description) {
           await service.setCollectionDescription(name, description)
         }
-        return `合集 "${name}" 创建成功！${description ? `描述为: ${description}` : ''}`
+        return `表情包 "${name}" 创建成功！${description ? `描述为: ${description}` : ''}`
       } catch (err) {
-        return `创建合集失败: ${(err as Error).message}`
+        return `创建表情包失败: ${(err as Error).message}`
       }
     })
 
   const stoleAction = async (session: any, name: string) => {
     if (!session) return
     if (!name) {
-      return '使用方式：引用图片并回复 "偷了 [合集名称]" 或 "memesluna stole [合集名称]"'
+      return '使用方式：引用图片并回复 "偷了 [表情包名称]" 或 "memesluna stole [表情包名称]"'
     }
 
     const service = ctx.memesluna
@@ -996,7 +996,7 @@ export function apply(ctx: Context, config: Config) {
         await service.createCollection(name)
       }
     } catch (err) {
-      return `检查/创建合集失败: ${(err as Error).message}`
+      return `检查/创建表情包失败: ${(err as Error).message}`
     }
 
     let imageUrls: string[] = []
@@ -1009,7 +1009,7 @@ export function apply(ctx: Context, config: Config) {
     }
 
     if (!imageUrls.length) {
-      return '没有找到要偷的图片。请引用包含图片的聊天记录，或者在发送图片的同时回复 "偷了 [合集名称]"'
+      return '没有找到要偷的图片。请引用包含图片的聊天记录，或者在发送图片的同时回复 "偷了 [表情包名称]"'
     }
 
     let successCount = 0
@@ -1036,11 +1036,11 @@ export function apply(ctx: Context, config: Config) {
       return '偷表情包失败，下载图片或上传保存时发生错误。'
     }
 
-    return `成功偷了 ${successCount} 张表情包存入合集 "${name}"！新文件名：${savedFilenames.join(', ')}`
+    return `成功偷了 ${successCount} 张表情包存入表情包 "${name}"！新文件名：${savedFilenames.join(', ')}`
   }
 
   root
-    .subcommand('.stole <name:string>', '偷取引用消息中的图片并存入指定合集')
+    .subcommand('.stole <name:string>', '偷取引用消息中的图片并存入指定表情包')
     .action(async ({ session }, name) => {
       return await stoleAction(session, name)
     })

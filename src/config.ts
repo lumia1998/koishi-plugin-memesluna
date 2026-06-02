@@ -36,7 +36,7 @@ export const Config: Schema<Config> = Schema.object({
     .description('后端服务路径前缀'),
   storagePath: Schema.string()
     .default('data/memesluna')
-    .description('本地合集存储目录'),
+    .description('本地表情包存储目录'),
   selfUrl: Schema.string()
     .default('')
     .description('服务公开地址，不填则优先使用 server.selfUrl'),

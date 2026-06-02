@@ -15,13 +15,13 @@
           
           <template v-if="activeMenu === 'resources' && currentCollection">
             <span class="crumb-separator">/</span>
-            <span class="crumb-child active">合集: {{ currentCollection.name }}</span>
+            <span class="crumb-child active">表情包: {{ currentCollection.name }}</span>
           </template>
         </div>
         
         <!-- Quick Stats Banner -->
         <div class="header-quick-stats" v-if="!loading">
-          <span class="stat-bubble">📂 合集总数: {{ collections.length }}</span>
+          <span class="stat-bubble">📂 表情包总数: {{ collections.length }}</span>
           <span class="stat-bubble">🌐 分发接口: {{ endpoints.length }}</span>
         </div>
       </header>
@@ -88,18 +88,18 @@
             <!-- Creator bar card -->
             <div class="flat-card creator-bar">
               <div class="creator-title">
-                <h2 class="card-title">📦 表情包合集仓库</h2>
+                <h2 class="card-title">📦 表情包仓库</h2>
               </div>
               
               <div class="creator-form">
                 <input 
                   v-model="newCollectionName"
                   class="flat-input collection-name-input"
-                  placeholder="新建合集名称 (限字母/拼音)" 
+                  placeholder="新建表情包名称 (限字母/拼音)" 
                   @keyup.enter="createCollection"
                 />
                 <button @click="createCollection" class="btn btn-primary">
-                  新建合集
+                  新建表情包
                 </button>
               </div>
             </div>
@@ -107,8 +107,8 @@
             <!-- Folders grid layout -->
             <div v-if="!collections.length" class="empty-placeholder-card">
               <div class="empty-icon">📁</div>
-              <h3>尚未创建任何表情合集</h3>
-              <p>在上方输入合集名称即可快速创建一个新的图床合集。</p>
+              <h3>尚未创建任何表情包</h3>
+              <p>在上方输入表情包名称即可快速创建一个新的表情包。</p>
             </div>
             
             <div v-else class="folders-grid">
@@ -151,31 +151,31 @@
               
               <!-- Card 1: Main Control Actions -->
               <div class="flat-card sidebar-section">
-                <h3 class="sidebar-sec-title">合集控制</h3>
+                <h3 class="sidebar-sec-title">表情包控制</h3>
                 <div class="sidebar-actions">
                   <button @click="exitCollectionDetail" class="btn btn-secondary w-full py-2 flex items-center justify-center gap-2">
                     <svg class="back-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                       <line x1="19" y1="12" x2="5" y2="12"></line>
                       <polyline points="12 19 5 12 12 5"></polyline>
                     </svg>
-                    返回合集列表
+                    返回表情包列表
                   </button>
                   <button @click="confirmDeleteCollection(currentCollection.name)" class="btn btn-danger w-full mt-2">
-                    永久删除合集
+                    永久删除表情包
                   </button>
                 </div>
               </div>
 
               <!-- Card 2: Collection Description -->
               <div class="flat-card sidebar-section mt-4">
-                <h3 class="sidebar-sec-title">合集描述信息</h3>
-                <p class="sidebar-sec-desc">该描述将注入 ChatLuna 变量 {memesluna}，帮助 AI 理解本合集的表情包属性。</p>
+                <h3 class="sidebar-sec-title">表情包描述信息</h3>
+                <p class="sidebar-sec-desc">该描述将注入 ChatLuna 变量 {memesluna}，帮助 AI 理解该表情包的属性。</p>
                 <div class="sidebar-desc-form">
                   <textarea 
                     v-model="newDescription" 
                     class="flat-textarea w-full" 
                     rows="3"
-                    placeholder="请输入对合集包的详细描述，例如: 丛雨的可爱表情包，常用于日常撒娇聊天等背景。" 
+                    placeholder="请输入对表情包的详细描述，例如: 丛雨的可爱表情包，常用于日常撒娇聊天等背景。" 
                   ></textarea>
                   <button @click="saveCollectionDescription" class="btn btn-primary w-full mt-2">
                     保存描述
@@ -242,7 +242,7 @@
               <div class="flat-card detail-main-header">
                 <div class="detail-header-left">
                   <h2 class="detail-title">
-                    合集名: {{ currentCollection.name }}
+                    表情包: {{ currentCollection.name }}
                   </h2>
                   <p class="detail-route">
                     随机分发 API 端点：
@@ -267,7 +267,7 @@
                 <h3 class="gallery-title">📁 本地存储图片 ({{ detailResources.images.length }} 张)</h3>
 
                 <div v-if="!detailResources.images.length" class="empty-gallery">
-                  合集内尚无任何本地图片资源
+                  表情包内尚无任何本地图片资源
                 </div>
                 
                 <div v-else>
@@ -296,7 +296,7 @@
                           </button>
                           <!-- Move Target Dropdown menu -->
                           <div class="move-dropdown-menu">
-                            <div class="dropdown-header">选择合集:</div>
+                            <div class="dropdown-header">选择表情包:</div>
                             <template v-for="targetCol in collections">
                               <button 
                                 v-if="targetCol.name !== currentCollection.name"
@@ -356,7 +356,7 @@
                 <h3 class="gallery-title">🔗 外部链接直链 ({{ detailResources.links.length }} 条)</h3>
 
                 <div v-if="!detailResources.links.length" class="empty-gallery">
-                  合集内尚未配置任何外部直链图片
+                  表情包内尚未配置任何外部直链图片
                 </div>
 
                 <div v-else class="links-list-container">
@@ -566,10 +566,10 @@
               <p class="section-desc">当配置为注入变量时，系统会将当前的表情仓库自动拼接为指定规格格式，以下是注入 AI 提示词上下文的真实呈现。</p>
               
               <div class="preview-prompt-container mt-4">
-                <div class="preview-sub-title">注入变量：{endpoint} (格式化后的可用图床合集)</div>
+                <div class="preview-sub-title">注入变量：{endpoint} (格式化后的可用图床表情包)</div>
                 <div class="preview-code-block">
                   <pre v-if="routeInventoryText">{{ routeInventoryText }}</pre>
-                  <pre v-else class="text-gray-muted">- 暂无可用合集及路由，请前往表情包管理或分发管理中创建 -</pre>
+                  <pre v-else class="text-gray-muted">- 暂无可用表情包及路由，请前往表情包管理或分发管理中创建 -</pre>
                 </div>
 
                 <div class="preview-sub-title mt-4">最终组合注入：{memesluna} (发送给 LLM 提示词全貌)</div>
@@ -820,7 +820,7 @@ async function copyToClipboard(text: string) {
 async function createCollection() {
   const name = newCollectionName.value.trim()
   if (!name) {
-    showToast('表情包合集名称不能为空', 'error')
+    showToast('表情包名称不能为空', 'error')
     return
   }
 
@@ -828,10 +828,10 @@ async function createCollection() {
     loading.value = true
     const success = await send('memesluna/createCollection', name)
     if (!success) {
-      showToast('该名称的合集已存在，请更换其他名称', 'error')
+      showToast('该名称的表情包已存在，请更换其他名称', 'error')
       return
     }
-    showToast('表情包合集已成功创建', 'success')
+    showToast('表情包已成功创建', 'success')
     newCollectionName.value = ''
     await fetchState()
   } catch (err) {
@@ -842,12 +842,12 @@ async function createCollection() {
 }
 
 async function confirmDeleteCollection(name: string) {
-  if (!confirm(`⚠️ 危险操作：确认永久且彻底删除表情包合集 "${name}"，及其包含的所有本地图片文件吗？此项操作不可逆！`)) return
+  if (!confirm(`⚠️ 危险操作：确认永久且彻底删除表情包 "${name}"，及其包含的所有本地图片文件吗？此项操作不可逆！`)) return
 
   try {
     loading.value = true
     await send('memesluna/deleteCollection', name)
-    showToast('该合集资源已彻底销毁删除', 'success')
+    showToast('该表情包资源已彻底销毁删除', 'success')
     currentCollection.value = null
     await fetchState()
   } catch (err) {
@@ -881,7 +881,7 @@ async function loadCollectionResources(name: string) {
       detailResources.links = Array.isArray(data.links) ? data.links : []
     }
   } catch (err) {
-    showToast('加载该合集下的图片缓存失败', 'error')
+    showToast('加载该表情包下的图片缓存失败', 'error')
   }
 }
 
@@ -902,12 +902,12 @@ async function saveCollectionDescription() {
   try {
     loading.value = true
     await send('memesluna/setCollectionDescription', currentCollection.value.name, newDescription.value.trim())
-    showToast('合集描述已成功保存', 'success')
+    showToast('表情包描述已成功保存', 'success')
     await fetchState()
     const match = collections.value.find(c => c.name === currentCollection.value.name)
     if (match) currentCollection.value = match
   } catch (err) {
-    showToast(err instanceof Error ? err.message : '保存合集描述失败', 'error')
+    showToast(err instanceof Error ? err.message : '保存表情包描述失败', 'error')
   } finally {
     loading.value = false
   }
@@ -1076,7 +1076,7 @@ async function moveImage(source: string, target: string, filename: string) {
     loading.value = true
     const newFilename = await send('memesluna/moveLocalImage', source, target, filename)
     if (newFilename) {
-      showToast(`已将素材移动至合集 "${target}" 并重命名`, 'success')
+      showToast(`已将素材移动至表情包 "${target}" 并重命名`, 'success')
       await loadCollectionResources(source)
       await fetchState()
     } else {

@@ -946,7 +946,7 @@ export class MemesLunaService extends Service {
       const info = await this.getCollectionInfo(collection)
       if (info?.hasContent) {
         const desc = info.description || collection
-        lines.push(`- 合集名: ${collection} | 描述: ${desc} | 随机端点: ${backendPath}/${collection}`)
+        lines.push(`- 表情包: ${collection} | 描述: ${desc} | 随机端点: ${backendPath}/${collection}`)
       }
     }
 
