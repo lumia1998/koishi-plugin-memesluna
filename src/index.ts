@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { createRequire } from 'module'
 import type {} from '@koishijs/plugin-console'
 import type {} from 'koishi-plugin-chatluna'
 
@@ -184,12 +185,17 @@ function toAbsoluteBaseUrl(ctx: Context, config: Config): string {
   return config.selfUrl || ctx.server?.selfUrl || ''
 }
 
+function getLocalBaseUrl(ctx: Context, config: Config, requestOrigin?: string): string {
+  return requestOrigin || toAbsoluteBaseUrl(ctx, config)
+}
+
 async function applyDynamicForward(
   ctx: Context,
   config: Config,
   service: MemesLunaService,
   routeName: string,
-  query: Record<string, unknown>
+  query: Record<string, unknown>,
+  requestOrigin?: string
 ) {
   const endpoint = await service.getEndpointByName(routeName)
   const isCollection = await service.collectionExists(routeName)
@@ -330,11 +336,11 @@ async function applyDynamicForward(
       if (resource.public_url) {
         return { redirectTo: resource.public_url }
       }
-      const localUrl = `${toAbsoluteBaseUrl(ctx, config)}${config.backendPath}/api/admin/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
+      const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
       return { redirectTo: localUrl }
     }
     // local file
-    const localUrl = `${toAbsoluteBaseUrl(ctx, config)}${config.backendPath}/api/admin/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
+    const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
     return { redirectTo: localUrl }
   } else {
     // proxy mode
@@ -453,8 +459,8 @@ async function updateMemesVariable(ctx: Context, config: Config, service: MemesL
   ;(ctx as any).chatluna.promptRenderer.setVariable('endpoint', inventory || '- 暂无可用路由')
 
   const memeslunaText = config.injectVariablesPrompt
-    .replace('{endpoint}', inventory || '- 暂无可用路由')
-    .replace('{base_url}', baseUrl)
+    .replaceAll('{endpoint}', inventory || '- 暂无可用路由')
+    .replaceAll('{base_url}', baseUrl)
 
   ;(ctx as any).chatluna.promptRenderer.setVariable('memesluna', memeslunaText)
 }
@@ -467,11 +473,12 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
   }
 
   const consoleService = ctx.console as any;
-  const packageBase = path.resolve(__dirname, '..');
-  console.log('[MemesLuna] packageBase:', packageBase);
-  
-  const devPath = path.resolve(packageBase, 'client/index.ts');
-  const prodPath = path.resolve(packageBase, 'dist');
+
+  // plugin-console 安全检查要求 prod 路径必须包含 'node_modules' 或者以 this.root 开头
+  // Windows Junction 被 require.resolve 跟随到真实路径（不含 node_modules），会触发 403
+  // 解决方案：通过 ctx.baseDir（Koishi 根目录）直接拼出含 node_modules 字符串的路径
+  const devPath = path.resolve(__dirname, '..', 'client/index.ts');
+  const prodPath = path.join(ctx.baseDir, 'node_modules', 'koishi-plugin-memesluna', 'dist');
   console.log('[MemesLuna] Registering console entry:', { dev: devPath, prod: prodPath });
 
   const withReady = <T extends unknown[], R>(handler: (...args: T) => Promise<R> | R) => {
@@ -597,8 +604,8 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     const inventory = await service.buildRouteInventory(basePath)
 
     const llmPrompt = config.injectVariablesPrompt
-      .replace('{endpoint}', inventory || '- 暂无可用路由')
-      .replace('{base_url}', baseUrl)
+      .replaceAll('{endpoint}', inventory || '- 暂无可用路由')
+      .replaceAll('{base_url}', baseUrl)
 
     koa.body = {
       llmPrompt,
@@ -887,6 +894,22 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     }
   })
 
+  ctx.server.get(`${basePath}/api/collections/:name/images/:filename`, async (koa) => {
+    const collectionName = toTrimmedString(koa.params.name)
+    const filename = toTrimmedString(koa.params.filename)
+
+    const image = await service.getLocalImageBuffer(collectionName, filename)
+    if (!image) {
+      koa.status = 404
+      koa.body = { error: 'Image not found' }
+      return
+    }
+
+    koa.status = 200
+    koa.set('Content-Type', image.mime)
+    koa.body = image.buffer
+  })
+
   ctx.server.get(`${basePath}/`, async (koa) => {
     koa.redirect('/console/memesluna')
   })
@@ -905,7 +928,8 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
       config,
       service,
       routeName,
-      koa.request.query as Record<string, unknown>
+      koa.request.query as Record<string, unknown>,
+      koa.request.origin
     )
 
     setKoaResponse(koa, result)

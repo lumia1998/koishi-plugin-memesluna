@@ -23,7 +23,7 @@ export type UrlConstruction =
 
 export interface Config {
   backendPath: string
-  storagePath: string
+  storagePath?: string
   selfUrl: string
   injectVariables: boolean
   variableRefreshIntervalMs: number
@@ -34,9 +34,6 @@ export const Config: Schema<Config> = Schema.object({
   backendPath: Schema.string()
     .default('/memesluna')
     .description('后端服务路径前缀'),
-  storagePath: Schema.string()
-    .default('data/memesluna')
-    .description('本地表情包存储目录'),
   selfUrl: Schema.string()
     .default('')
     .description('服务公开地址，不填则优先使用 server.selfUrl'),
@@ -50,7 +47,11 @@ export const Config: Schema<Config> = Schema.object({
     .description('变量刷新间隔（毫秒）'),
   injectVariablesPrompt: Schema.string()
     .role('textarea')
-    .default(`你可以使用表情包来丰富你的回复。表情包列表是{endpoint}，基础URL是{base_url}，你要把基础URL拼接到路径前面,不要加文件名,只加路径,用发送图片的方式发送。`)
+    .default(`你可以使用表情包来丰富你的回复。可用的表情包合集如下：
+
+{endpoint}
+
+使用方法：直接用 {base_url} 拼接路径即可，例如 {base_url}/memesluna/yuzu ，访问该URL会自动随机返回一张图片。绝对不要在路径后面添加任何文件名或数字（如 /1.png、/25.png），否则会404。只需要发送合集路径，服务器会自动随机选图。`)
     .description('注入到 ChatLuna {{memesluna}} 变量的提示词模板，支持 {endpoint} 和 {base_url} 占位符'),
 })
 

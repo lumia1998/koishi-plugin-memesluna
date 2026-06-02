@@ -172,15 +172,12 @@ export class MemesLunaService extends Service {
   }
 
   private getStorageRoot() {
-    return path.resolve(this.ctx.baseDir, this.config.storagePath)
+    return path.resolve(this.ctx.baseDir, this.config.storagePath || 'data/memesluna')
   }
 
   private getStorageBackend() {
     if (this.ctx.chatluna_storage && (this.ctx.chatluna_storage as any).storageBackend) {
-      const backend = (this.ctx.chatluna_storage as any).storageBackend
-      if (backend.type !== 'local') {
-        return backend
-      }
+      return (this.ctx.chatluna_storage as any).storageBackend
     }
     return null
   }
@@ -946,7 +943,8 @@ export class MemesLunaService extends Service {
       const info = await this.getCollectionInfo(collection)
       if (info?.hasContent) {
         const desc = info.description || collection
-        lines.push(`- 表情包: ${collection} | 描述: ${desc} | 随机端点: ${backendPath}/${collection}`)
+        const displayName = desc.endsWith('表情包') ? desc : `${desc}表情包`
+        lines.push(`- ${displayName} | 描述: ${collection} | 表情包路径: ${backendPath}/${collection}`)
       }
     }
 

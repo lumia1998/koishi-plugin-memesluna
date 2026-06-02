@@ -1,7 +1,7 @@
 <template>
   <div class="memesluna-app-layout">
     
-    <!-- MAIN CONTENT AREA (No vertical sidebar, perfectly integrated with Koishi native sidebar) -->
+    <!-- MAIN CONTENT AREA -->
     <main class="notion-content">
       
       <!-- Top Notion Breadcrumbs -->
@@ -85,30 +85,28 @@
           
           <!-- Collection Lists (Folder view) -->
           <div v-if="!currentCollection" class="collections-folder-view">
-            <!-- Creator bar card -->
-            <div class="flat-card creator-bar">
-              <div class="creator-title">
-                <h2 class="card-title">📦 表情包仓库</h2>
-              </div>
-              
-              <div class="creator-form">
+            <!-- Creator bar in Notion Style -->
+            <div class="notion-db-header">
+              <h2 class="notion-db-title">📦 表情包仓库</h2>
+              <div class="notion-db-actions">
                 <input 
                   v-model="newCollectionName"
-                  class="flat-input collection-name-input"
-                  placeholder="新建表情包名称 (限字母/拼音)" 
+                  class="flat-input collection-name-input-notion"
+                  placeholder="输入名称并回车创建..." 
                   @keyup.enter="createCollection"
                 />
-                <button @click="createCollection" class="btn btn-primary">
-                  新建表情包
+                <button @click="createCollection" class="btn btn-primary btn-notion">
+                  + 新建表情包
                 </button>
               </div>
             </div>
+            <hr class="notion-hr" />
 
             <!-- Folders grid layout -->
             <div v-if="!collections.length" class="empty-placeholder-card">
               <div class="empty-icon">📁</div>
               <h3>尚未创建任何表情包</h3>
-              <p>在上方输入表情包名称即可快速创建一个新的表情包。</p>
+              <p>在右侧输入表情包名称即可快速创建一个新的表情包。</p>
             </div>
             
             <div v-else class="folders-grid">
@@ -143,66 +141,78 @@
             </div>
           </div>
 
-          <!-- Collection Card Details (Inside details view) -->
-          <div v-else class="collection-detail-layout">
-            
-            <!-- Left Sidebar controls for this collection -->
-            <aside class="detail-sidebar">
-              
-              <!-- Card 1: Main Control Actions -->
-              <div class="flat-card sidebar-section">
-                <h3 class="sidebar-sec-title">表情包控制</h3>
-                <div class="sidebar-actions">
-                  <button @click="exitCollectionDetail" class="btn btn-secondary w-full py-2 flex items-center justify-center gap-2">
-                    <svg class="back-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                      <line x1="19" y1="12" x2="5" y2="12"></line>
-                      <polyline points="12 19 5 12 12 5"></polyline>
-                    </svg>
-                    返回表情包列表
-                  </button>
-                  <button @click="confirmDeleteCollection(currentCollection.name)" class="btn btn-danger w-full mt-2">
-                    永久删除表情包
-                  </button>
+          <!-- Collection Details (Inside details view) -->
+          <div 
+            v-else 
+            class="collection-detail-layout"
+            @dragover.prevent="dragOver = true"
+          >
+            <!-- Notion Document Title Block -->
+            <div class="notion-page-header">
+              <div class="notion-page-header-left">
+                <div class="notion-page-icon">📂</div>
+                <div class="notion-page-title-wrapper">
+                  <h1 class="notion-page-title">表情包: {{ currentCollection.name }}</h1>
+                  <div class="notion-page-meta">
+                    API 端点:
+                    <code class="code-url" @click="copyToClipboard(getBaseRedirectUrl(currentCollection.name))" title="点击复制完整 URL">
+                      {{ getBaseRedirectUrl(currentCollection.name) }}
+                    </code>
+                  </div>
                 </div>
               </div>
+              <div class="notion-page-header-right">
+                <a :href="getBaseRedirectUrl(currentCollection.name)" target="_blank" class="btn-test-link" title="测试">
+                  ⚡ 测试
+                </a>
+              </div>
+            </div>
 
-              <!-- Card 2: Collection Description -->
-              <div class="flat-card sidebar-section mt-4">
-                <h3 class="sidebar-sec-title">表情包描述信息</h3>
-                <p class="sidebar-sec-desc">该描述将注入 ChatLuna 变量 {memesluna}，帮助 AI 理解该表情包的属性。</p>
-                <div class="sidebar-desc-form">
-                  <textarea 
+            <!-- Page Action Toolbar -->
+            <div class="notion-page-toolbar">
+              <button @click="exitCollectionDetail" class="toolbar-btn">
+                ◀ 返回列表
+              </button>
+              <button @click="refreshCollectionResources" class="toolbar-btn">
+                🔄 刷新缓存
+              </button>
+              <div class="toolbar-divider"></div>
+              <button @click="confirmDeleteCollection(currentCollection.name)" class="toolbar-btn danger">
+                🗑️ 删除表情包
+              </button>
+            </div>
+
+            <!-- Notion Page Properties Block -->
+            <div class="notion-properties-panel">
+              <div class="property-row">
+                <div class="property-label">
+                  <span class="prop-icon">📝</span> 表情包描述
+                </div>
+                <div class="property-value">
+                  <input 
                     v-model="newDescription" 
-                    class="flat-textarea w-full" 
-                    rows="3"
-                    placeholder="请输入对表情包的详细描述，例如: 丛雨的可爱表情包，常用于日常撒娇聊天等背景。" 
-                  ></textarea>
-                  <button @click="saveCollectionDescription" class="btn btn-primary w-full mt-2">
-                    保存描述
-                  </button>
+                    class="property-input-text" 
+                    placeholder="回车或失去焦点即可自动保存描述（帮助 AI 理解该表情包属性）..."
+                    @blur="saveCollectionDescription"
+                    @keyup.enter="saveCollectionDescription"
+                  />
                 </div>
               </div>
+            </div>
 
-              <!-- Card 3: Batch Upload Images -->
-              <div class="flat-card sidebar-section mt-4">
-                <h3 class="sidebar-sec-title">上传图片 (本地/云端)</h3>
-                
-                <div 
-                  class="sidebar-drop-zone"
-                  :class="{ 'drag-over': dragOver }"
-                  @dragover.prevent="dragOver = true"
-                  @dragleave.prevent="dragOver = false"
-                  @drop.prevent="onDrop"
-                  @click="triggerFileInput"
-                >
-                  <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                    <polyline points="17 8 12 3 7 8"></polyline>
-                    <line x1="12" y1="3" x2="12" y2="15"></line>
-                  </svg>
-                  <p class="drop-text">拖放图片文件至此</p>
-                  <span class="btn-select-file">或手动选择文件</span>
-                  
+            <!-- Upload and Batch Import Area (Notion Callout style) -->
+            <div class="notion-callout upload-callout mt-4">
+              <div class="callout-icon">📤</div>
+              <div class="callout-content">
+                <div class="callout-title">上传与导入图片素材</div>
+                <div class="callout-desc">拖放本地图片文件至页面任何位置，或手动选择文件进行上传。单张限制 10MB。</div>
+                <div class="callout-actions">
+                  <button @click="triggerFileInput" class="btn btn-secondary btn-small">
+                    选择本地文件
+                  </button>
+                  <button @click="showImportLinks = !showImportLinks" class="btn btn-secondary btn-small">
+                    {{ showImportLinks ? '收起外链导入' : '批量导入外链' }}
+                  </button>
                   <input 
                     ref="fileInput"
                     type="file" 
@@ -212,91 +222,100 @@
                     @change="onFileSelected"
                   />
                 </div>
-                <p class="sidebar-hint mt-2">单次最多上传 50 张，单图最大限制 10MB。自动拒绝 AVIF 格式以适配 QQ 显示。</p>
               </div>
+            </div>
 
-              <!-- Card 4: Add Picture Links -->
-              <div class="flat-card sidebar-section mt-4">
-                <h3 class="sidebar-sec-title">批量导入外链</h3>
-                <p class="sidebar-sec-desc">支持导入直链作为表情素材分发</p>
-                <div class="links-form">
-                  <textarea 
-                    v-model="externalLinksText"
-                    rows="3"
-                    class="flat-textarea w-full"
-                    placeholder="每行一个以 http:// 或 https:// 开头的网络图片链接"
-                  ></textarea>
-                  
-                  <button @click="addExternalLinks" class="btn btn-primary w-full mt-2">
-                    确认添加外链
-                  </button>
-                </div>
+            <!-- Drag over drop zone area -->
+            <div 
+              class="sidebar-drop-zone-overlay"
+              v-show="dragOver"
+              @dragover.prevent="dragOver = true"
+              @dragleave.prevent="dragOver = false"
+              @drop.prevent="onDrop"
+            >
+              <div class="drop-overlay-box">
+                <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="17 8 12 3 7 8"></polyline>
+                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                <p>释放图片文件以导入此表情包</p>
               </div>
+            </div>
 
-            </aside>
-
-            <!-- Right content area for this collection -->
-            <main class="detail-main-content">
-              
-              <!-- Collection header card -->
-              <div class="flat-card detail-main-header">
-                <div class="detail-header-left">
-                  <h2 class="detail-title">
-                    表情包: {{ currentCollection.name }}
-                  </h2>
-                  <p class="detail-route">
-                    随机分发 API 端点：
-                    <code class="code-url" @click="copyToClipboard(getBaseRedirectUrl(currentCollection.name))">
-                      {{ getBaseRedirectUrl(currentCollection.name) }}
-                    </code>
-                    <a :href="getBaseRedirectUrl(currentCollection.name)" target="_blank" class="btn-test-link" title="点此在新窗口中测试抽取">
-                      ⚡ 测试
-                    </a>
-                  </p>
-                </div>
-                
-                <div class="detail-header-actions">
-                  <button @click="refreshCollectionResources" class="btn btn-secondary">
-                    🔄 刷新数据缓存
-                  </button>
+            <!-- Links Import area -->
+            <div v-show="showImportLinks" class="notion-callout links-import-callout mt-3">
+              <div class="callout-icon">🔗</div>
+              <div class="callout-content w-full">
+                <div class="callout-title">批量导入外链</div>
+                <div class="callout-desc">每行输入一个以 http:// 或 https:// 开头的网络图片链接</div>
+                <textarea 
+                  v-model="externalLinksText"
+                  rows="4"
+                  class="flat-textarea w-full mt-2"
+                  placeholder="每行一个以 http:// 或 https:// 开头的链接"
+                ></textarea>
+                <div class="callout-actions mt-2">
+                  <button @click="addExternalLinks" class="btn btn-primary btn-small">确认导入</button>
+                  <button @click="showImportLinks = false" class="btn btn-secondary btn-small">取消</button>
                 </div>
               </div>
+            </div>
 
-              <!-- Local Images gallery section with Virtual Pagination -->
-              <div class="flat-card detail-main-section mt-4">
-                <h3 class="gallery-title">📁 本地存储图片 ({{ detailResources.images.length }} 张)</h3>
+            <!-- Notion database view tabs switcher -->
+            <div class="gallery-view-switcher mt-4">
+              <button 
+                @click="currentGalleryTab = 'local'"
+                :class="['gallery-tab-btn', currentGalleryTab === 'local' ? 'active' : '']"
+              >
+                📁 本地存储图片 ({{ detailResources.images.length }})
+              </button>
+              <button 
+                @click="currentGalleryTab = 'external'"
+                :class="['gallery-tab-btn', currentGalleryTab === 'external' ? 'active' : '']"
+              >
+                🔗 外部链接直链 ({{ detailResources.links.length }})
+              </button>
+            </div>
 
-                <div v-if="!detailResources.images.length" class="empty-gallery">
-                  表情包内尚无任何本地图片资源
-                </div>
-                
-                <div v-else>
-                  <div class="image-grid-flat">
+            <!-- Tab Content 1: Local Images Gallery -->
+            <div v-show="currentGalleryTab === 'local'" class="gallery-tab-content">
+              <div v-if="!detailResources.images.length" class="empty-gallery">
+                表情包内尚无任何本地图片资源
+              </div>
+              <div v-else>
+                <div class="notion-gallery-grid">
+                  <div 
+                    v-for="img in paginatedImages" 
+                    :key="img"
+                    class="notion-gallery-card"
+                    :class="{ 'notion-gallery-card-active-dropdown': activeMoveDropdown === img }"
+                  >
                     <div 
-                      v-for="img in paginatedImages" 
-                      :key="img"
-                      class="image-card-flat"
+                      class="gallery-img-container"
+                      @click="openImage(getLocalImageApiUrl(currentCollection.name, img))"
+                      style="cursor: pointer;"
+                      title="在新标签页中打开原图"
                     >
-                      <div class="img-container">
-                        <img 
-                          :src="getLocalImageApiUrl(currentCollection.name, img)" 
-                          class="image-thumbnail" 
-                          loading="lazy" 
-                        />
-                      </div>
-                      
-                      <div class="image-card-footer">
-                        <span class="image-filename truncate" :title="img">{{ img }}</span>
-                        
-                        <!-- Row 1: Move dropdown (Full Width) -->
-                        <div class="move-dropdown-container">
-                          <button class="btn-action-small btn-move">
-                            <span>移动至</span>
-                            <svg class="chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                          </button>
-                          <!-- Move Target Dropdown menu -->
-                          <div class="move-dropdown-menu">
-                            <div class="dropdown-header">选择表情包:</div>
+                      <img 
+                        :src="getLocalImageApiUrl(currentCollection.name, img)" 
+                        class="gallery-img" 
+                        loading="lazy" 
+                      />
+                    </div>
+
+                    <!-- Hover overlay on card (actions) -->
+                    <div class="gallery-card-overlay">
+                      <div class="overlay-actions">
+                        <div 
+                          class="card-action-btn move move-dropdown-container"
+                          @click.stop="toggleMoveDropdown(img)"
+                        >
+                          <span>修改</span>
+                          <div 
+                            class="move-dropdown-menu"
+                            v-show="activeMoveDropdown === img"
+                          >
                             <template v-for="targetCol in collections">
                               <button 
                                 v-if="targetCol.name !== currentCollection.name"
@@ -309,164 +328,129 @@
                             </template>
                           </div>
                         </div>
-
-                        <!-- Row 2: View and Delete (Side by Side) -->
-                        <div class="image-actions-row">
-                          <button 
-                            @click.stop="openImage(getLocalImageApiUrl(currentCollection.name, img))"
-                            class="btn-action-small btn-view"
-                          >
-                            原图
-                          </button>
-                          
-                          <button 
-                            @click.stop="confirmDeleteImage(currentCollection.name, img)" 
-                            class="btn-action-small btn-delete"
-                          >
-                            删除
-                          </button>
-                        </div>
+                        
+                        <button 
+                          @click.stop="confirmDeleteImage(currentCollection.name, img)" 
+                          class="card-action-btn danger"
+                        >
+                          删除
+                        </button>
                       </div>
                     </div>
                   </div>
-
-                  <!-- Pagination bar -->
-                  <div v-if="totalPages > 1" class="pagination-container">
-                    <button 
-                      :disabled="currentPage === 1" 
-                      @click="currentPage--"
-                      class="btn btn-secondary page-btn"
-                    >
-                      上一页
-                    </button>
-                    <span class="page-indicator">第 <b>{{ currentPage }}</b> / {{ totalPages }} 页</span>
-                    <button 
-                      :disabled="currentPage === totalPages" 
-                      @click="currentPage++"
-                      class="btn btn-secondary page-btn"
-                    >
-                      下一页
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Links Direct Links gallery section -->
-              <div class="flat-card detail-main-section mt-4">
-                <h3 class="gallery-title">🔗 外部链接直链 ({{ detailResources.links.length }} 条)</h3>
-
-                <div v-if="!detailResources.links.length" class="empty-gallery">
-                  表情包内尚未配置任何外部直链图片
                 </div>
 
-                <div v-else class="links-list-container">
-                  <div 
-                    v-for="link in detailResources.links" 
-                    :key="link"
-                    class="link-item-row"
+                <!-- Pagination bar -->
+                <div v-if="totalPages > 1" class="pagination-container">
+                  <button 
+                    :disabled="currentPage === 1" 
+                    @click="currentPage--"
+                    class="btn btn-secondary page-btn"
                   >
-                    <div class="link-url-wrapper">
-                      <span class="bullet">•</span>
-                      <span class="link-url-text truncate" @click="copyToClipboard(link)">
-                        {{ link }}
-                      </span>
-                    </div>
-                    <div class="link-actions">
-                      <button 
-                        @click="copyToClipboard(link)"
-                        class="icon-btn hover-bg"
-                        title="复制直链链接"
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                        </svg>
-                      </button>
-                      <button 
-                        @click="deleteExternalLink(currentCollection.name, link)"
-                        class="icon-btn hover-danger"
-                        title="删除该外链"
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <polyline points="3 6 5 6 21 6"></polyline>
-                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                        </svg>
-                      </button>
-                    </div>
+                    上一页
+                  </button>
+                  <span class="page-indicator">第 <b>{{ currentPage }}</b> / {{ totalPages }} 页</span>
+                  <button 
+                    :disabled="currentPage === totalPages" 
+                    @click="currentPage++"
+                    class="btn btn-secondary page-btn"
+                  >
+                    下一页
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tab Content 2: External Links List -->
+            <div v-show="currentGalleryTab === 'external'" class="gallery-tab-content">
+              <div v-if="!detailResources.links.length" class="empty-gallery">
+                表情包内尚未配置任何外部直链图片
+              </div>
+              <div v-else class="links-list-container">
+                <div 
+                  v-for="link in detailResources.links" 
+                  :key="link"
+                  class="link-item-row"
+                >
+                  <div class="link-url-wrapper">
+                    <span class="bullet">•</span>
+                    <span class="link-url-text truncate" @click="copyToClipboard(link)">
+                      {{ link }}
+                    </span>
+                  </div>
+                  <div class="link-actions">
+                    <button 
+                      @click="copyToClipboard(link)"
+                      class="icon-btn hover-bg"
+                      title="复制直链链接"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                      </svg>
+                    </button>
+                    <button 
+                      @click="deleteExternalLink(currentCollection.name, link)"
+                      class="icon-btn hover-danger"
+                      title="删除该外链"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                      </svg>
+                    </button>
                   </div>
                 </div>
               </div>
+            </div>
 
-            </main>
           </div>
         </div>
 
         <!-- MENU VIEW 2: DISTRIBUTION (🌐) -->
         <div v-else-if="activeMenu === 'distribution'" class="distribution-router-view">
+          <div class="notion-title-row">
+            <h1 class="notion-main-title">🌐 接口分发与路由管理</h1>
+          </div>
+          <p class="section-desc">通过配置以下分发 API 端点，可以用统一的本地路由分发或代理外部直链。</p>
+          <hr class="notion-hr" />
+
           <div class="dashboard-grid">
             
             <!-- Endpoint Editor Form Panel -->
-            <div class="flat-card form-panel">
-              <h2 class="card-title">
+            <div class="notion-form-panel">
+              <h2 class="notion-panel-title">
                 {{ editingEndpoint ? '📝 编辑分发端点' : '➕ 创建新分发端点' }}
               </h2>
               
               <div class="form-fields">
                 <div class="form-group">
-                  <label>接口端点名称 *</label>
+                  <label>端点名称 *</label>
                   <input 
                     v-model="endpointForm.name" 
                     :disabled="!!editingEndpoint" 
                     class="flat-input"
-                    placeholder="例如: random_avatar" 
+                    placeholder="例如: moe" 
                   />
-                  <span class="field-hint">端点建立后不可更改。此项将成为本地转发路由的基础访问后缀。</span>
+                  <span class="field-hint">只能包含字母、数字、下划线和连字符</span>
                 </div>
 
                 <div class="form-group">
-                  <label>目标重定向目标直链 URL *</label>
-                  <input 
-                    v-model="endpointForm.url" 
-                    class="flat-input"
-                    placeholder="例如: https://api.multiavatar.com" 
-                  />
-                </div>
-
-                <div class="form-group">
-                  <label>分组名称</label>
-                  <input 
-                    v-model="endpointForm.group" 
-                    class="flat-input"
-                    placeholder="例如: 角色表情、系统内置" 
-                  />
-                </div>
-
-                <div class="form-group">
-                  <label>端点功能描述</label>
+                  <label>描述</label>
                   <input 
                     v-model="endpointForm.description" 
                     class="flat-input"
-                    placeholder="简述此端点的抽取内容，例如: 随机动漫头像生成" 
+                    placeholder="例如: 萌版横图" 
                   />
                 </div>
 
-                <div class="form-row">
-                  <div class="form-group flex-1">
-                    <label>分发转发方法</label>
-                    <select v-model="endpointForm.method" class="flat-select">
-                      <option value="redirect">302 重定向</option>
-                      <option value="proxy">反向代理 (直接输入图片流)</option>
-                    </select>
-                  </div>
-
-                  <div class="form-group flex-1">
-                    <label>接口拼接模式</label>
-                    <select v-model="endpointForm.urlConstruction" class="flat-select">
-                      <option value="normal">标准 URL 查询参数</option>
-                      <option value="special_forward">参数 URL 特殊代转</option>
-                      <option value="special_pollinations">AI 绘图端点直连</option>
-                    </select>
-                  </div>
+                <div class="form-group">
+                  <label>目标 URL *</label>
+                  <input 
+                    v-model="endpointForm.url" 
+                    class="flat-input"
+                    placeholder="https://example.com/api" 
+                  />
                 </div>
 
                 <div class="form-actions">
@@ -474,22 +458,19 @@
                     {{ editingEndpoint ? '保存修改' : '立即创建' }}
                   </button>
                   <button @click="resetEndpointForm" class="btn btn-secondary">
-                    重置取消
+                    取消
                   </button>
                 </div>
               </div>
             </div>
 
             <!-- Endpoints Table List -->
-            <div class="flat-card list-panel">
-              <h2 class="card-title">已配置的跳转与分发 API 路由列表</h2>
-              <p class="section-desc">客户端或机器人通过以下本地 URL 即可获取中继分发，系统将进行高性能重定向或真实数据流吐出。</p>
-
+            <div class="notion-table-panel">
               <div class="table-container">
                 <table class="flat-table">
                   <thead>
                     <tr>
-                      <th style="width: 20%">名称 / 分组</th>
+                      <th style="width: 20%">名称</th>
                       <th style="width: 25%">描述</th>
                       <th style="width: 40%">访问路径 & 转发目标</th>
                       <th style="width: 15%; text-align: right">管理</th>
@@ -502,14 +483,12 @@
                     <tr v-for="item in endpoints" :key="item.name">
                       <td>
                         <div class="endpoint-name">{{ item.name }}</div>
-                        <span class="group-badge">{{ item.group || '默认分组' }}</span>
                       </td>
                       <td class="cell-desc" :title="item.description">
                         {{ item.description || '-' }}
                       </td>
                       <td class="font-mono">
                         <div class="url-line">
-                          <span class="method-tag" :class="item.method">{{ item.method || 'redirect' }}</span>
                           <span class="link-text" @click="copyToClipboard(getBaseRedirectUrl(item.name))">
                             /{{ item.name }}
                           </span>
@@ -561,9 +540,12 @@
           <div class="settings-centered-layout">
 
             <!-- Centered: Interactive AI Prompt Variables Preview -->
-            <div class="flat-card settings-preview-panel">
-              <h2 class="card-title">✨ ChatLuna AI 变量注入预览</h2>
-              <p class="section-desc">当配置为注入变量时，系统会将当前的表情仓库自动拼接为指定规格格式，以下是注入 AI 提示词上下文的真实呈现。</p>
+            <div class="settings-preview-panel">
+              <div class="notion-title-row">
+                <h1 class="notion-main-title">✨ ChatLuna AI 变量注入预览</h1>
+              </div>
+              <p class="section-desc">当配置为注入变量时，系统会将当前的表情仓库自动以 Notion 图库的规格变量形式拼接，以下是注入 AI 提示词上下文的真实呈现。</p>
+              <hr class="notion-hr" />
               
               <div class="preview-prompt-container mt-4">
                 <div class="preview-sub-title">注入变量：{endpoint} (格式化后的可用图床表情包)</div>
@@ -590,11 +572,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { send } from '@koishijs/client'
 
 // Navigation states
-const activeMenu = ref<'resources' | 'distribution' | 'settings'>('settings')
+const activeMenu = ref<'resources' | 'distribution' | 'settings'>('resources')
 const loading = ref(true)
 
 // Core state data
@@ -624,6 +606,18 @@ const detailResources = reactive({
   images: [] as string[],
   links: [] as string[]
 })
+const currentGalleryTab = ref<'local' | 'external'>('local')
+const showImportLinks = ref(false)
+
+const activeMoveDropdown = ref<string | null>(null)
+
+function toggleMoveDropdown(img: string) {
+  if (activeMoveDropdown.value === img) {
+    activeMoveDropdown.value = null
+  } else {
+    activeMoveDropdown.value = img
+  }
+}
 
 // Pagination reactivity for Images gallery
 const currentPage = ref(1)
@@ -688,19 +682,9 @@ function getLocalImageApiUrl(collection: string, filename: string): string {
 // Fetch variables from Koishi app
 async function fetchState() {
   try {
-    let rawBaseUrl = await send('memesluna/getBaseUrl')
-    if (rawBaseUrl) {
-      if (rawBaseUrl.startsWith('/')) {
-        rawBaseUrl = window.location.origin + rawBaseUrl
-      }
-      const cleanPath = backendPath.value.startsWith('/') ? backendPath.value : `/${backendPath.value}`
-      const formattedPath = cleanPath.endsWith('/') ? cleanPath.slice(0, -1) : cleanPath
-      if (rawBaseUrl.endsWith(formattedPath)) {
-        baseUrl.value = rawBaseUrl.slice(0, -formattedPath.length)
-      } else {
-        baseUrl.value = rawBaseUrl
-      }
-    }
+    // WebUI 始终运行在 Koishi 内嵌服务器上，直接用 window.location.origin 作为 baseUrl
+    // selfUrl 是机器人发图用的公网地址，不能用于 WebUI 的 HTTP 接口请求
+    baseUrl.value = window.location.origin
 
     const state = await send('memesluna/getState')
     if (state) {
@@ -1093,13 +1077,20 @@ function openImage(url: string) {
   window.open(url, '_blank')
 }
 
-// Lifecycle Mounted
+const closeDropdowns = () => {
+  activeMoveDropdown.value = null
+}
+
+// Lifecycle Hooks
 onMounted(async () => {
+  window.addEventListener('click', closeDropdowns)
   loading.value = true
   await fetchState()
-  // Default tab is 'settings' (preview), so fetch preview data on mount
-  await fetchSettingsPreview()
   loading.value = false
+})
+
+onUnmounted(() => {
+  window.removeEventListener('click', closeDropdowns)
 })
 
 // Listeners/Watchers
@@ -1115,36 +1106,36 @@ watch(detailResources, () => {
 /* GENERAL ROOT STYLE DESIGNED LIKE SLICK MODERN NOTION DOCUMENT */
 .memesluna-app-layout {
   min-height: 100vh;
-  padding-left: 64px; /* Offset Koishi's native fixed left sidebar to prevent overlap */
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji";
-  background-color: #ffffff;
-  color: #37352f;
+  padding-left: 64px; /* Offset Koishi's native fixed left sidebar */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Segoe UI Emoji", "Apple Color Emoji";
+  background-color: var(--k-bg-card, #ffffff);
+  color: var(--k-text-normal, #37352f);
   box-sizing: border-box;
 }
 
-/* RIGHT MAIN VIEW CONTENT */
 .notion-content {
-  background-color: #ffffff;
   padding: 24px 32px;
   box-sizing: border-box;
+  max-width: 1200px;
+  margin: 0 auto;
 }
 
-/* Notion Premium Breadcrumb Header */
+/* Notion Breadcrumb Header */
 .content-breadcrumb-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
   padding-bottom: 12px;
-  border-bottom: 1px solid rgba(55, 53, 47, 0.08);
+  border-bottom: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.08));
 }
 
 .breadcrumbs {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.88rem;
-  color: rgba(55, 53, 47, 0.55);
+  font-size: 0.82rem;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.5));
 }
 
 .crumb-root {
@@ -1152,18 +1143,17 @@ watch(detailResources, () => {
 }
 
 .crumb-parent {
-  color: #37352f;
+  color: var(--k-text-normal, #37352f);
   font-weight: 500;
 }
 
 .crumb-child.active {
-  color: #2383e2;
+  color: var(--k-color-primary, #2383e2);
   font-weight: 600;
 }
 
 .crumb-separator {
-  color: rgba(55, 53, 47, 0.25);
-  font-weight: 400;
+  color: var(--k-color-border, rgba(55, 53, 47, 0.25));
 }
 
 .header-quick-stats {
@@ -1172,20 +1162,20 @@ watch(detailResources, () => {
 }
 
 .stat-bubble {
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 500;
-  background-color: rgba(55, 53, 47, 0.05);
-  color: rgba(55, 53, 47, 0.65);
+  background-color: var(--k-bg-panel, rgba(55, 53, 47, 0.05));
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.65));
   padding: 2px 8px;
   border-radius: 4px;
 }
 
-/* Notion-style Horizontal View Switcher */
+/* Notion Horizontal View Switcher */
 .notion-view-switcher {
   display: flex;
   align-items: center;
   gap: 4px;
-  border-bottom: 1px solid rgba(55, 53, 47, 0.08);
+  border-bottom: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.08));
   margin-bottom: 24px;
   padding-bottom: 2px;
 }
@@ -1196,7 +1186,7 @@ watch(detailResources, () => {
   padding: 6px 16px;
   font-size: 0.85rem;
   font-weight: 500;
-  color: rgba(55, 53, 47, 0.6);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.5));
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1210,13 +1200,13 @@ watch(detailResources, () => {
 }
 
 .switcher-btn:hover {
-  background-color: rgba(55, 53, 47, 0.04);
-  color: #37352f;
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.04));
+  color: var(--k-text-normal, #37352f);
 }
 
 .switcher-btn.active {
-  color: #37352f;
-  border-bottom: 2px solid #37352f;
+  color: var(--k-text-normal, #37352f);
+  border-bottom: 2px solid var(--k-text-normal, #37352f);
   font-weight: 600;
   border-radius: 0;
 }
@@ -1225,75 +1215,560 @@ watch(detailResources, () => {
   font-size: 0.95rem;
 }
 
-/* General Layout Items */
-.content-body-wrapper {
-  animation: fadeIn 0.15s ease-out;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-/* Generic Card style matching Notion simplicity */
-.flat-card {
-  background: #ffffff;
-  border: 1px solid rgba(55, 53, 47, 0.09);
-  border-radius: 6px;
-  padding: 20px;
-  box-sizing: border-box;
-}
-
-.card-title {
-  font-size: 0.85rem;
-  font-weight: 600;
-  margin: 0 0 8px 0;
-  color: rgba(55, 53, 47, 0.6);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.section-desc {
-  font-size: 0.78rem;
-  color: rgba(55, 53, 47, 0.55);
-  margin: 0 0 16px 0;
-  line-height: 1.55;
-}
-
-/* CREATOR BARS */
-.creator-bar {
+/* Notion Title and Database Header */
+.notion-db-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 24px;
+  margin-top: 12px;
+  margin-bottom: 12px;
 }
 
-.creator-title {
-  max-width: 500px;
+.notion-db-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--k-text-normal, #37352f);
 }
 
-.creator-form {
+.notion-db-actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.collection-name-input {
-  width: 260px;
+.collection-name-input-notion {
+  width: 200px;
+  height: 28px;
+  font-size: 0.78rem;
 }
 
-/* Notion Input/Forms elements */
+.btn-notion {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+}
+
+.notion-hr {
+  border: none;
+  border-top: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.09));
+  margin: 8px 0 20px 0;
+}
+
+/* Folders Grid & Cards */
+.folders-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.folder-card {
+  background: var(--k-bg-card, #ffffff);
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.09));
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.folder-card:hover {
+  border-color: var(--k-color-primary, #2383e2);
+  background-color: var(--k-bg-button-hover, #fbfbfa);
+}
+
+.folder-header {
+  height: 80px;
+  background-color: var(--k-bg-panel, #f7f7f5);
+  border-bottom: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.06));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.4));
+}
+
+.folder-card:hover .folder-header {
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
+  background-color: var(--k-bg-button-hover, #f1f1ef);
+}
+
+.folder-header svg {
+  width: 28px;
+  height: 28px;
+}
+
+.folder-body {
+  padding: 12px 14px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-sizing: border-box;
+}
+
+.folder-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--k-text-normal, #37352f);
+  margin-bottom: 4px;
+}
+
+.folder-desc {
+  font-size: 0.75rem;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
+  line-height: 1.4;
+  height: 34px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.folder-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.06));
+}
+
+.folder-meta {
+  font-size: 0.68rem;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.45));
+  font-weight: 500;
+}
+
+.folder-manage-link {
+  font-size: 0.72rem;
+  color: var(--k-color-primary, #2383e2);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.folder-card:hover .folder-manage-link {
+  text-decoration: underline;
+}
+
+.chevron-right {
+  width: 8px;
+  height: 8px;
+}
+
+/* Notion Page Title & Header Block */
+.notion-page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+  margin-bottom: 16px;
+}
+
+.notion-page-header-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.notion-page-header-right {
+  display: flex;
+  align-items: center;
+  align-self: flex-end;
+  margin-bottom: 2px;
+}
+
+.notion-page-icon {
+  font-size: 2.2rem;
+  user-select: none;
+}
+
+.notion-page-title-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.notion-page-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+  margin: 0;
+  color: var(--k-text-normal, #37352f);
+}
+
+.notion-page-meta {
+  font-size: 0.78rem;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.code-url {
+  background-color: var(--k-bg-panel, rgba(135, 131, 120, 0.15));
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: SFMono-Regular, Consolas, monospace;
+  font-size: 0.75rem;
+  color: #eb5757;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.code-url:hover {
+  background-color: var(--k-bg-button-hover, rgba(135, 131, 120, 0.25));
+}
+
+.btn-test-link {
+  font-size: 0.72rem;
+  font-weight: 600;
+  background-color: var(--k-bg-card, #ffffff);
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.15));
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--k-text-normal, #37352f);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.btn-test-link:hover {
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.04));
+}
+
+/* Notion Page Action Toolbar */
+.notion-page-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.08));
+  padding-bottom: 8px;
+}
+
+.toolbar-btn {
+  background: transparent;
+  border: none;
+  font-size: 0.78rem;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.6));
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-weight: 500;
+  transition: all 0.1s ease;
+}
+
+.toolbar-btn:hover {
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.04));
+  color: var(--k-text-normal, #37352f);
+}
+
+.toolbar-btn.danger {
+  color: #eb5757;
+}
+
+.toolbar-btn.danger:hover {
+  background-color: rgba(235, 87, 87, 0.08);
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 14px;
+  background-color: var(--k-color-border, rgba(55, 53, 47, 0.12));
+}
+
+/* Notion Properties Panel */
+.notion-properties-panel {
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.property-row {
+  display: flex;
+  align-items: center;
+  font-size: 0.82rem;
+}
+
+.property-label {
+  width: 110px;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.45));
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+
+.prop-icon {
+  font-size: 0.95rem;
+}
+
+.property-value {
+  flex: 1;
+}
+
+.property-input-text {
+  border: none;
+  background: transparent;
+  font-size: 0.82rem;
+  color: var(--k-text-normal, #37352f);
+  width: 100%;
+  padding: 4px 8px;
+  border-radius: 4px;
+  box-sizing: border-box;
+  font-family: inherit;
+  transition: background 0.1s ease;
+}
+
+.property-input-text:hover {
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.03));
+}
+
+.property-input-text:focus {
+  background-color: var(--k-bg-card, #ffffff);
+  box-shadow: inset 0 0 0 1px var(--k-color-primary, #2383e2);
+  outline: none;
+}
+
+/* Notion Callout Box (Upload controls) */
+.notion-callout {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 4px;
+  background-color: var(--k-bg-panel, rgba(242, 241, 237, 0.45));
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.08));
+}
+
+.callout-icon {
+  font-size: 1.15rem;
+  user-select: none;
+}
+
+.callout-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.callout-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--k-text-normal, #37352f);
+  margin-bottom: 2px;
+}
+
+.callout-desc {
+  font-size: 0.75rem;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.5));
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.callout-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-small {
+  font-size: 0.75rem;
+  padding: 2px 10px;
+  height: 24px;
+}
+
+.hidden-file-input {
+  display: none;
+}
+
+/* Drag Over Overlay */
+.sidebar-drop-zone-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 9999;
+  background-color: rgba(255, 255, 255, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  box-sizing: border-box;
+}
+
+.drop-overlay-box {
+  border: 2px dashed var(--k-color-primary, #2383e2);
+  background-color: rgba(35, 131, 226, 0.04);
+  border-radius: 8px;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--k-color-primary, #2383e2);
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.drop-overlay-box .drop-icon {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 16px;
+}
+
+/* Notion database gallery switcher tabs */
+.gallery-view-switcher {
+  display: flex;
+  gap: 16px;
+  border-bottom: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.09));
+  padding-bottom: 2px;
+}
+
+.gallery-tab-btn {
+  background: transparent;
+  border: none;
+  font-size: 0.82rem;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.5));
+  cursor: pointer;
+  padding-bottom: 6px;
+  border-bottom: 2px solid transparent;
+  font-weight: 500;
+  transition: all 0.1s ease;
+}
+
+.gallery-tab-btn:hover {
+  color: var(--k-text-normal, #37352f);
+}
+
+.gallery-tab-btn.active {
+  color: var(--k-text-normal, #37352f);
+  border-bottom-color: var(--k-text-normal, #37352f);
+}
+
+.gallery-tab-content {
+  margin-top: 16px;
+}
+
+/* Notion Gallery view grid & cards */
+.notion-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.notion-gallery-card {
+  background: var(--k-bg-card, #ffffff);
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.08));
+  border-radius: 4px;
+  position: relative;
+  aspect-ratio: 1;
+  transition: border-color 0.12s ease;
+  box-shadow: none;
+}
+
+.notion-gallery-card:hover {
+  border-color: var(--k-color-primary, #2383e2);
+}
+
+.gallery-img-container {
+  width: 100%;
+  height: 100%;
+  background-color: var(--k-bg-panel, #f7f7f5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.gallery-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Hover overlay on top of square image card */
+.gallery-card-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.22) 0%,
+    rgba(0, 0, 0, 0) 35%,
+    rgba(0, 0, 0, 0) 100%
+  );
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.notion-gallery-card:hover .gallery-card-overlay,
+.notion-gallery-card-active-dropdown .gallery-card-overlay {
+  opacity: 1;
+}
+
+.overlay-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.overlay-actions .card-action-btn {
+  border: none;
+  background-color: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(2px);
+  color: var(--k-text-normal, #37352f);
+  font-size: 0.65rem;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  transition: all 0.1s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.overlay-actions .card-action-btn.move:hover {
+  background: #2b8a5c;
+  color: #ffffff;
+}
+
+.overlay-actions .card-action-btn.danger {
+  color: #eb5757;
+}
+
+.overlay-actions .card-action-btn.danger:hover {
+  background: #eb5757;
+  color: #ffffff;
+}
+
+/* Notion Inputs/Select/Textarea inputs */
 .flat-input,
 .flat-select,
 .flat-textarea {
   box-sizing: border-box;
   padding: 6px 10px;
-  border: 1px solid rgba(15, 15, 15, 0.12);
+  border: 1px solid var(--k-color-border, rgba(15, 15, 15, 0.12));
   border-radius: 4px;
-  background: rgba(242, 241, 237, 0.45);
-  color: #37352f;
+  background: var(--k-bg-panel, rgba(242, 241, 237, 0.45));
+  color: var(--k-text-normal, #37352f);
   font-size: 0.82rem;
   font-family: inherit;
   transition: background 0.1s ease, border-color 0.1s ease;
@@ -1303,25 +1778,25 @@ watch(detailResources, () => {
 .flat-input:focus,
 .flat-select:focus,
 .flat-textarea:focus {
-  border-color: #2383e2;
-  background: #ffffff;
+  border-color: var(--k-color-primary, #2383e2);
+  background: var(--k-bg-card, #ffffff);
   box-shadow: 0 0 0 2px rgba(35, 131, 226, 0.15);
 }
 
 .flat-input:disabled {
-  background: rgba(55, 53, 47, 0.05);
-  color: rgba(55, 53, 47, 0.4);
+  background: var(--k-bg-panel, rgba(55, 53, 47, 0.05));
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.4));
   cursor: not-allowed;
 }
 
 .field-hint {
   font-size: 0.7rem;
-  color: rgba(55, 53, 47, 0.45);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.45));
   margin-top: 4px;
   display: block;
 }
 
-/* Premium Buttons */
+/* Notion Buttons styling */
 .btn {
   box-sizing: border-box;
   padding: 4px 14px;
@@ -1338,7 +1813,7 @@ watch(detailResources, () => {
 }
 
 .btn-primary {
-  background-color: #2383e2;
+  background-color: var(--k-color-primary, #2383e2);
   color: #ffffff;
 }
 
@@ -1347,13 +1822,13 @@ watch(detailResources, () => {
 }
 
 .btn-secondary {
-  background-color: #ffffff;
-  color: #37352f;
-  border: 1px solid rgba(55, 53, 47, 0.16);
+  background-color: var(--k-bg-card, #ffffff);
+  color: var(--k-text-normal, #37352f);
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.16));
 }
 
 .btn-secondary:hover {
-  background-color: rgba(55, 53, 47, 0.04);
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.04));
 }
 
 .btn-danger {
@@ -1377,9 +1852,9 @@ watch(detailResources, () => {
 .empty-placeholder-card {
   padding: 60px 20px;
   text-align: center;
-  border: 1px dashed rgba(55, 53, 47, 0.2);
+  border: 1px dashed var(--k-color-border, rgba(55, 53, 47, 0.2));
   border-radius: 8px;
-  background-color: rgba(55, 53, 47, 0.01);
+  background-color: var(--k-bg-panel, rgba(55, 53, 47, 0.01));
 }
 
 .empty-icon {
@@ -1395,474 +1870,37 @@ watch(detailResources, () => {
 
 .empty-placeholder-card p {
   font-size: 0.78rem;
-  color: rgba(55, 53, 47, 0.5);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.5));
   margin: 0;
-}
-
-/* FOLDERS GRID IN COLLECTIONS */
-.folders-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
-}
-
-.folder-card {
-  background: #ffffff;
-  border: 1px solid rgba(55, 53, 47, 0.09);
-  border-radius: 6px;
-  overflow: hidden;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  display: flex;
-  flex-direction: column;
-}
-
-.folder-card:hover {
-  border-color: rgba(55, 53, 47, 0.16);
-  background-color: #fbfbfa;
-}
-
-.folder-header {
-  height: 80px;
-  background-color: #f7f7f5;
-  border-bottom: 1px solid rgba(55, 53, 47, 0.06);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgba(55, 53, 47, 0.4);
-}
-
-.folder-card:hover .folder-header {
-  color: rgba(55, 53, 47, 0.55);
-  background-color: #f1f1ef;
-}
-
-.folder-header svg {
-  width: 28px;
-  height: 28px;
-}
-
-.folder-body {
-  padding: 12px 14px;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  box-sizing: border-box;
-}
-
-.folder-name {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #37352f;
-  margin-bottom: 4px;
-}
-
-.folder-desc {
-  font-size: 0.75rem;
-  color: rgba(55, 53, 47, 0.55);
-  line-height: 1.4;
-  height: 34px;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.folder-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(55, 53, 47, 0.06);
-}
-
-.folder-meta {
-  font-size: 0.68rem;
-  color: rgba(55, 53, 47, 0.45);
-  font-weight: 500;
-}
-
-.folder-manage-link {
-  font-size: 0.72rem;
-  color: #2383e2;
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.folder-card:hover .folder-manage-link {
-  text-decoration: underline;
-}
-
-.chevron-right {
-  width: 8px;
-  height: 8px;
-}
-
-/* COLLECTION DETAIL VIEWS & SPLIT LAYOUT */
-.collection-detail-layout {
-  display: grid;
-  grid-template-columns: 260px 1fr;
-  gap: 24px;
-  align-items: start;
-}
-
-.detail-sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.sidebar-section {
-  padding: 16px !important;
-}
-
-.sidebar-sec-title {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: rgba(55, 53, 47, 0.55);
-  margin: 0 0 8px 0;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.sidebar-sec-desc {
-  font-size: 0.72rem;
-  color: rgba(55, 53, 47, 0.48);
-  margin: 0 0 8px 0;
-  line-height: 1.45;
-}
-
-.sidebar-actions {
-  display: flex;
-  flex-direction: column;
-}
-
-.back-icon {
-  width: 12px;
-  height: 12px;
-}
-
-.sidebar-drop-zone {
-  border: 1px dashed rgba(55, 53, 47, 0.35);
-  border-radius: 6px;
-  padding: 18px 12px;
-  text-align: center;
-  cursor: pointer;
-  background-color: rgba(55, 53, 47, 0.015);
-  transition: all 0.12s ease;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-
-.sidebar-drop-zone:hover,
-.sidebar-drop-zone.drag-over {
-  border-color: #2383e2;
-  background-color: rgba(35, 131, 226, 0.04);
-}
-
-.sidebar-drop-zone .drop-icon {
-  width: 20px;
-  height: 20px;
-  color: rgba(55, 53, 47, 0.35);
-  margin-bottom: 6px;
-}
-
-.sidebar-drop-zone .drop-text {
-  font-size: 0.75rem;
-  font-weight: 500;
-  margin: 0;
-}
-
-.btn-select-file {
-  font-size: 0.72rem;
-  color: #2383e2;
-  font-weight: 500;
-  margin-top: 4px;
-  display: inline-block;
-}
-
-.btn-select-file:hover {
-  text-decoration: underline;
-}
-
-.hidden-file-input {
-  display: none;
-}
-
-.sidebar-hint {
-  font-size: 0.65rem;
-  color: rgba(55, 53, 47, 0.48);
-  margin: 6px 0 0 0;
-  line-height: 1.4;
-}
-
-/* Detail view right main container */
-.detail-main-content {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.detail-main-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 20px !important;
-}
-
-.detail-title {
-  font-size: 1.05rem;
-  font-weight: 600;
-  margin: 0;
-  color: #37352f;
-}
-
-.detail-route {
-  font-size: 0.78rem;
-  margin: 6px 0 0 0;
-  color: rgba(55, 53, 47, 0.55);
-}
-
-.code-url {
-  background-color: rgba(135, 131, 120, 0.15);
-  padding: 0.15em 0.35em;
-  border-radius: 3px;
-  font-family: SFMono-Regular, Consolas, monospace;
-  font-size: 0.78rem;
-  color: #eb5757;
-  cursor: pointer;
-}
-
-.code-url:hover {
-  background-color: rgba(135, 131, 120, 0.25);
-}
-
-.btn-test-link {
-  font-size: 0.75rem;
-  font-weight: 600;
-  background-color: #f7f7f5;
-  border: 1px solid rgba(55, 53, 47, 0.15);
-  border-radius: 4px;
-  padding: 2px 8px;
-  color: #37352f;
-  text-decoration: none;
-  margin-left: 8px;
-  display: inline-flex;
-  align-items: center;
-}
-
-.btn-test-link:hover {
-  background-color: rgba(55, 53, 47, 0.04);
-}
-
-.gallery-title {
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: rgba(55, 53, 47, 0.5);
-  margin: 0 0 14px 0;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .empty-gallery {
   padding: 36px;
   text-align: center;
-  color: rgba(55, 53, 47, 0.4);
-  background-color: #f7f7f5;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.4));
+  background-color: var(--k-bg-panel, #f7f7f5);
   border-radius: 6px;
   font-size: 0.78rem;
 }
 
-/* Image gallery flat grid — fixed 5 columns */
-.image-grid-flat {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 14px;
-}
-
-@media (max-width: 1100px) {
-  .image-grid-flat {
-    grid-template-columns: repeat(4, 1fr);
-  }
-}
-
-@media (max-width: 800px) {
-  .image-grid-flat {
-    grid-template-columns: repeat(3, 1fr);
-  }
-}
-
-.image-card-flat {
-  background: #ffffff;
-  border: 1px solid rgba(55, 53, 47, 0.08);
-  border-radius: 10px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  transition: all 0.18s ease;
-  position: relative;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-}
-
-.image-card-flat:hover {
-  border-color: rgba(35, 131, 226, 0.25);
-  box-shadow: 0 4px 12px rgba(35, 131, 226, 0.08);
-  transform: translateY(-1px);
-}
-
-.img-container {
-  width: 100%;
-  aspect-ratio: 1;
-  background-color: #f7f7f5;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-bottom: 1px solid rgba(55, 53, 47, 0.05);
-}
-
-.image-thumbnail {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  transition: transform 0.2s ease;
-}
-
-.image-card-flat:hover .image-thumbnail {
-  transform: scale(1.04);
-}
-
-.image-card-footer {
-  padding: 8px 8px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  background: #ffffff;
-}
-
-.image-filename {
-  font-size: 0.7rem;
-  color: rgba(55, 53, 47, 0.7);
-  font-weight: 500;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  width: 100%;
-  display: block;
-  letter-spacing: 0.01em;
-}
-
-/* Row 1: Move dropdown button */
+/* Move dropdown menu */
 .move-dropdown-container {
   position: relative;
-  width: 100%;
-}
-
-.move-dropdown-container .btn-move {
-  width: 100%;
-}
-
-/* Row 2: View + Delete side by side */
-.image-actions-row {
-  display: flex;
-  gap: 5px;
-}
-
-/* Base button style */
-.btn-action-small {
-  border: none;
-  border-radius: 6px;
-  padding: 0 8px;
-  font-size: 0.68rem;
-  font-weight: 600;
-  cursor: pointer;
-  height: 24px;
-  flex: 1;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  white-space: nowrap;
-  transition: all 0.12s ease;
-  letter-spacing: 0.01em;
-}
-
-/* View (原图) — neutral grey pill */
-.btn-action-small.btn-view {
-  background-color: rgba(55, 53, 47, 0.06);
-  color: rgba(55, 53, 47, 0.75);
-}
-
-.btn-action-small.btn-view:hover {
-  background-color: rgba(55, 53, 47, 0.11);
-  color: #37352f;
-}
-
-/* Delete (删除) — soft red */
-.btn-action-small.btn-delete {
-  background-color: rgba(235, 87, 87, 0.08);
-  color: #c0392b;
-}
-
-.btn-action-small.btn-delete:hover {
-  background-color: rgba(235, 87, 87, 0.18);
-  color: #eb5757;
-}
-
-/* Move (移动至) — blue accent, full width */
-.btn-action-small.btn-move {
-  background: linear-gradient(135deg, rgba(35, 131, 226, 0.1), rgba(35, 131, 226, 0.06));
-  color: #2383e2;
-  border: 1px solid rgba(35, 131, 226, 0.2);
-}
-
-.btn-action-small.btn-move:hover {
-  background: linear-gradient(135deg, rgba(35, 131, 226, 0.18), rgba(35, 131, 226, 0.12));
-  border-color: rgba(35, 131, 226, 0.35);
-}
-
-.chevron-down {
-  width: 9px;
-  height: 9px;
-  flex-shrink: 0;
-  opacity: 0.7;
 }
 
 .move-dropdown-menu {
   position: absolute;
-  bottom: 100%;
-  right: 0;
-  margin-bottom: 4px;
-  background-color: #ffffff;
-  border: 1px solid rgba(55, 53, 47, 0.15);
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background-color: var(--k-bg-card, #ffffff);
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.15));
   border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(15, 15, 15, 0.1);
-  display: none;
-  z-index: 50;
-  width: 100px;
-  max-height: 120px;
-  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(15, 15, 15, 0.15);
+  z-index: 100;
+  min-width: 120px;
+  width: max-content;
   box-sizing: border-box;
-}
-
-.move-dropdown-container:hover .move-dropdown-menu {
-  display: block;
-}
-
-.dropdown-header {
-  font-size: 0.62rem;
-  font-weight: 600;
-  color: rgba(55, 53, 47, 0.4);
-  padding: 4px 6px;
-  text-transform: uppercase;
 }
 
 .dropdown-item {
@@ -1873,11 +1911,11 @@ watch(detailResources, () => {
   padding: 4px 6px;
   font-size: 0.68rem;
   cursor: pointer;
-  color: #37352f;
+  color: var(--k-text-normal, #37352f);
 }
 
 .dropdown-item:hover {
-  background-color: rgba(55, 53, 47, 0.04);
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.04));
 }
 
 /* Pagination container styles */
@@ -1888,12 +1926,12 @@ watch(detailResources, () => {
   gap: 16px;
   margin-top: 20px;
   padding-top: 12px;
-  border-top: 1px solid rgba(55, 53, 47, 0.06);
+  border-top: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.06));
 }
 
 .page-indicator {
   font-size: 0.78rem;
-  color: rgba(55, 53, 47, 0.6);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.6));
 }
 
 .page-btn {
@@ -1904,7 +1942,7 @@ watch(detailResources, () => {
 
 /* Direct link lists */
 .links-list-container {
-  border: 1px solid rgba(55, 53, 47, 0.09);
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.09));
   border-radius: 6px;
   overflow: hidden;
 }
@@ -1914,8 +1952,8 @@ watch(detailResources, () => {
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
-  border-bottom: 1px solid rgba(55, 53, 47, 0.06);
-  background-color: #ffffff;
+  border-bottom: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.06));
+  background-color: var(--k-bg-card, #ffffff);
 }
 
 .link-item-row:last-child {
@@ -1923,7 +1961,7 @@ watch(detailResources, () => {
 }
 
 .link-item-row:hover {
-  background-color: rgba(55, 53, 47, 0.015);
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.015));
 }
 
 .link-url-wrapper {
@@ -1936,19 +1974,19 @@ watch(detailResources, () => {
 }
 
 .bullet {
-  color: rgba(55, 53, 47, 0.35);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.35));
   font-weight: 700;
 }
 
 .link-url-text {
-  color: rgba(55, 53, 47, 0.65);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.65));
   font-family: SFMono-Regular, Consolas, monospace;
   font-size: 0.75rem;
   cursor: pointer;
 }
 
 .link-url-text:hover {
-  color: #2383e2;
+  color: var(--k-color-primary, #2383e2);
   text-decoration: underline;
 }
 
@@ -1970,8 +2008,16 @@ watch(detailResources, () => {
   }
 }
 
-.form-panel {
-  padding: 20px;
+.notion-form-panel {
+  padding: 12px 0;
+}
+
+.notion-panel-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-top: 0;
+  margin-bottom: 16px;
+  color: var(--k-text-normal, #37352f);
 }
 
 .form-fields {
@@ -1988,7 +2034,7 @@ watch(detailResources, () => {
 .form-group label {
   font-size: 0.75rem;
   font-weight: 600;
-  color: rgba(55, 53, 47, 0.65);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.65));
   margin-bottom: 4px;
 }
 
@@ -2004,11 +2050,15 @@ watch(detailResources, () => {
 }
 
 /* Notion Database table view for endpoints */
+.notion-table-panel {
+  padding: 12px 0;
+}
+
 .table-container {
   overflow-x: auto;
-  border: 1px solid rgba(55, 53, 47, 0.08);
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.08));
   border-radius: 6px;
-  background-color: #ffffff;
+  background-color: var(--k-bg-card, #ffffff);
 }
 
 .flat-table {
@@ -2019,17 +2069,19 @@ watch(detailResources, () => {
 
 .flat-table th {
   padding: 8px 12px;
-  background-color: #f7f7f5;
-  border-bottom: 1px solid rgba(55, 53, 47, 0.08);
-  color: rgba(55, 53, 47, 0.55);
+  background-color: var(--k-bg-panel, #f7f7f5);
+  border-bottom: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.08));
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
   font-weight: 600;
   font-size: 0.72rem;
   text-transform: uppercase;
+  text-align: left;
 }
 
 .flat-table td {
   padding: 10px 12px;
-  border-bottom: 1px solid rgba(55, 53, 47, 0.05);
+  border-bottom: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.05));
+  text-align: left;
 }
 
 .flat-table tr:last-child td {
@@ -2039,7 +2091,7 @@ watch(detailResources, () => {
 .empty-cell {
   text-align: center;
   padding: 40px !important;
-  color: rgba(55, 53, 47, 0.35);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.35));
 }
 
 .endpoint-name {
@@ -2048,8 +2100,8 @@ watch(detailResources, () => {
 
 .group-badge {
   display: inline-block;
-  background-color: rgba(55, 53, 47, 0.06);
-  color: rgba(55, 53, 47, 0.6);
+  background-color: var(--k-bg-panel, rgba(55, 53, 47, 0.06));
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.6));
   padding: 1px 6px;
   border-radius: 3px;
   font-size: 0.65rem;
@@ -2058,7 +2110,7 @@ watch(detailResources, () => {
 }
 
 .cell-desc {
-  color: rgba(55, 53, 47, 0.55);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2086,7 +2138,7 @@ watch(detailResources, () => {
 
 .link-text {
   font-weight: 500;
-  color: #2383e2;
+  color: var(--k-color-primary, #2383e2);
   cursor: pointer;
 }
 
@@ -2096,7 +2148,7 @@ watch(detailResources, () => {
 
 .target-url {
   font-size: 0.72rem;
-  color: rgba(55, 53, 47, 0.4);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.4));
   max-width: 300px;
   margin-top: 2px;
 }
@@ -2109,11 +2161,11 @@ watch(detailResources, () => {
 
 .icon-btn {
   background: transparent;
-  border: 1px solid rgba(55, 53, 47, 0.15);
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.15));
   border-radius: 4px;
   padding: 3px;
   cursor: pointer;
-  color: rgba(55, 53, 47, 0.55);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
   display: inline-flex;
 }
 
@@ -2123,8 +2175,8 @@ watch(detailResources, () => {
 }
 
 .icon-btn.hover-bg:hover {
-  background-color: rgba(55, 53, 47, 0.04);
-  color: #37352f;
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.04));
+  color: var(--k-text-normal, #37352f);
 }
 
 .icon-btn.hover-danger:hover {
@@ -2137,14 +2189,14 @@ watch(detailResources, () => {
   background: transparent;
   border: none;
   cursor: pointer;
-  color: rgba(55, 53, 47, 0.35);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.35));
   display: inline-flex;
   padding: 0;
   vertical-align: middle;
 }
 
 .icon-btn-inline:hover {
-  color: #2383e2;
+  color: var(--k-color-primary, #2383e2);
 }
 
 .icon-btn-inline svg {
@@ -2164,34 +2216,6 @@ watch(detailResources, () => {
   max-width: 720px;
 }
 
-.settings-read-only-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.metric-card {
-  padding: 12px 16px;
-  background-color: #faf9f6;
-  border: 1px solid rgba(55, 53, 47, 0.08);
-  border-radius: 6px;
-}
-
-.metric-title {
-  display: block;
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: rgba(55, 53, 47, 0.45);
-  text-transform: uppercase;
-  margin-bottom: 4px;
-}
-
-.metric-value {
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: #37352f;
-}
-
 .preview-prompt-container {
   display: flex;
   flex-direction: column;
@@ -2201,13 +2225,13 @@ watch(detailResources, () => {
 .preview-sub-title {
   font-size: 0.72rem;
   font-weight: 600;
-  color: rgba(55, 53, 47, 0.45);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.45));
   text-transform: uppercase;
 }
 
 .preview-code-block {
-  background-color: #faf9f6;
-  border: 1px solid rgba(55, 53, 47, 0.08);
+  background-color: var(--k-bg-panel, #faf9f6);
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.08));
   border-radius: 6px;
   padding: 12px;
   max-height: 150px;
@@ -2220,7 +2244,7 @@ watch(detailResources, () => {
   font-size: 0.72rem;
   white-space: pre-wrap;
   word-break: break-all;
-  color: #27272a;
+  color: var(--k-text-normal, #27272a);
 }
 
 .preview-code-block.final-prompt {
@@ -2234,7 +2258,7 @@ watch(detailResources, () => {
 }
 
 .text-gray-muted {
-  color: rgba(55, 53, 47, 0.35);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.35));
   font-style: italic;
 }
 
@@ -2251,10 +2275,10 @@ watch(detailResources, () => {
   border-radius: 6px;
   font-size: 0.78rem;
   font-weight: 500;
-  background-color: #ffffff;
-  border: 1px solid rgba(55, 53, 47, 0.15);
+  background-color: var(--k-bg-card, #ffffff);
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.15));
   box-shadow: 0 4px 16px rgba(15, 15, 15, 0.1);
-  color: #37352f;
+  color: var(--k-text-normal, #37352f);
 }
 
 .toast-banner.success {
@@ -2287,8 +2311,8 @@ watch(detailResources, () => {
 .spinner {
   width: 20px;
   height: 20px;
-  border: 2px solid rgba(55, 53, 47, 0.08);
-  border-top-color: rgba(55, 53, 47, 0.6);
+  border: 2px solid var(--k-color-border, rgba(55, 53, 47, 0.08));
+  border-top-color: var(--k-text-normal, rgba(55, 53, 47, 0.6));
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin-bottom: 12px;
@@ -2300,7 +2324,7 @@ watch(detailResources, () => {
 
 .loading-container p {
   font-size: 0.78rem;
-  color: rgba(55, 53, 47, 0.5);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.5));
   margin: 0;
 }
 
