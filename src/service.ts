@@ -2,13 +2,7 @@ import { randomUUID } from 'crypto'
 import fs from 'fs/promises'
 import path from 'path'
 import { Context, Service } from 'koishi'
-import type {
-  ForwardMethod,
-  ProxySettings,
-  QueryParamConfig,
-  UrlConstruction,
-  Config,
-} from './config'
+import type { Config } from './config'
 
 const IMAGE_EXTENSIONS = new Set([
   '.jpg',
@@ -51,11 +45,7 @@ export interface ApiEndpoint {
   group: string
   description: string
   url: string
-  method: ForwardMethod
-  urlConstruction: UrlConstruction
-  modelName: string
-  queryParams: QueryParamConfig[]
-  proxySettings: ProxySettings
+  method: 'redirect'
   createdAt: Date
   updatedAt: Date
 }
@@ -65,11 +55,7 @@ export interface ApiEndpointInput {
   group?: string
   description?: string
   url: string
-  method: ForwardMethod
-  urlConstruction?: UrlConstruction
-  modelName?: string
-  queryParams?: QueryParamConfig[]
-  proxySettings?: ProxySettings
+  method?: 'redirect'
 }
 
 export interface CollectionInfo {
@@ -79,6 +65,9 @@ export interface CollectionInfo {
   localCount: number
   linkCount: number
   hasContent: boolean
+  createdAt?: Date
+  updatedAt?: Date
+  apiCallCount: number
   cover?: string
 }
 
@@ -167,6 +156,18 @@ export class MemesLunaService extends Service {
       {
         primary: 'id',
         unique: [['collection', 'index']],
+      }
+    )
+
+    this.ctx.database.extend(
+      'memesluna_collection_stats',
+      {
+        collection: 'string',
+        api_call_count: 'integer',
+        updated_at: 'timestamp',
+      },
+      {
+        primary: 'collection',
       }
     )
   }
@@ -774,6 +775,26 @@ export class MemesLunaService extends Service {
     const localImages = await this.getCollectionImages(collectionName)
     const links = await this.getCollectionLinks(collectionName)
     const description = await this.getCollectionDescription(collectionName)
+    const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName }, ['created_at'])
+    const dates = rows
+      .map((row) => new Date(row.created_at as Date))
+      .filter((date) => !Number.isNaN(date.getTime()))
+
+    let statCreatedAt: Date | undefined
+    let statUpdatedAt: Date | undefined
+    try {
+      const stat = await fs.stat(this.getCollectionDir(collectionName))
+      statCreatedAt = stat.birthtime
+      statUpdatedAt = stat.mtime
+    } catch {}
+
+    const createdAt = dates.length
+      ? new Date(Math.min(...dates.map((date) => date.getTime()), statCreatedAt?.getTime() || Infinity))
+      : statCreatedAt
+    const updatedAt = dates.length
+      ? new Date(Math.max(...dates.map((date) => date.getTime()), statUpdatedAt?.getTime() || 0))
+      : statUpdatedAt
+    const apiCallCount = await this.getCollectionApiCallCount(collectionName)
 
     return {
       name: collectionName,
@@ -782,8 +803,42 @@ export class MemesLunaService extends Service {
       linkCount: links.length,
       totalCount: localImages.length + links.length,
       hasContent: localImages.length > 0 || links.length > 0,
+      createdAt,
+      updatedAt,
+      apiCallCount,
       cover: localImages[0],
     }
+  }
+
+  async getCollectionApiCallCount(collectionName: string): Promise<number> {
+    if (!this.isValidCollectionName(collectionName)) {
+      return 0
+    }
+
+    const rows = await this.ctx.database.get('memesluna_collection_stats', { collection: collectionName })
+    return rows[0]?.api_call_count || 0
+  }
+
+  async incrementCollectionApiCallCount(collectionName: string): Promise<void> {
+    if (!this.isValidCollectionName(collectionName)) {
+      return
+    }
+
+    const rows = await this.ctx.database.get('memesluna_collection_stats', { collection: collectionName })
+    const now = new Date()
+    if (rows.length) {
+      await this.ctx.database.set('memesluna_collection_stats', { collection: collectionName }, {
+        api_call_count: (rows[0].api_call_count || 0) + 1,
+        updated_at: now,
+      })
+      return
+    }
+
+    await this.ctx.database.create('memesluna_collection_stats', {
+      collection: collectionName,
+      api_call_count: 1,
+      updated_at: now,
+    })
   }
 
   async getRandomResource(collectionName: string): Promise<CollectionResource | null> {
@@ -824,15 +879,6 @@ export class MemesLunaService extends Service {
     }
   }
 
-  private parseJsonField<T>(value: string | null | undefined, fallback: T): T {
-    if (!value) return fallback
-    try {
-      return JSON.parse(value) as T
-    } catch {
-      return fallback
-    }
-  }
-
   private mapEndpoint(row: MemesLunaEndpointRow): ApiEndpoint {
     return {
       id: row.id,
@@ -840,13 +886,7 @@ export class MemesLunaService extends Service {
       group: row.group || '默认分组',
       description: row.description || '',
       url: row.url,
-      method: (row.method as ForwardMethod) || 'redirect',
-      urlConstruction: (row.url_construction as UrlConstruction) || 'normal',
-      modelName: row.model_name || '',
-      queryParams: this.parseJsonField<QueryParamConfig[]>(row.query_params, []),
-      proxySettings: this.parseJsonField<ProxySettings>(row.proxy_settings, {
-        fallbackAction: 'returnJson',
-      }),
+      method: 'redirect',
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }
@@ -877,14 +917,11 @@ export class MemesLunaService extends Service {
       group: input.group || '默认分组',
       description: input.description || '',
       url: input.url,
-      method: input.method || 'redirect',
-      url_construction: input.urlConstruction || 'normal',
-      model_name: input.modelName || '',
-      query_params: JSON.stringify(input.queryParams || []),
-      proxy_settings: JSON.stringify({
-        fallbackAction: 'returnJson',
-        ...(input.proxySettings || {}),
-      }),
+      method: 'redirect',
+      url_construction: 'normal',
+      model_name: '',
+      query_params: JSON.stringify([]),
+      proxy_settings: JSON.stringify({}),
       created_at: now,
       updated_at: now,
     })
@@ -904,11 +941,11 @@ export class MemesLunaService extends Service {
     if (input.group !== undefined) payload.group = input.group || '默认分组'
     if (input.description !== undefined) payload.description = input.description || ''
     if (input.url !== undefined) payload.url = input.url
-    if (input.method !== undefined) payload.method = input.method
-    if (input.urlConstruction !== undefined) payload.url_construction = input.urlConstruction
-    if (input.modelName !== undefined) payload.model_name = input.modelName
-    if (input.queryParams !== undefined) payload.query_params = JSON.stringify(input.queryParams)
-    if (input.proxySettings !== undefined) payload.proxy_settings = JSON.stringify(input.proxySettings)
+    payload.method = 'redirect'
+    payload.url_construction = 'normal'
+    payload.model_name = ''
+    payload.query_params = JSON.stringify([])
+    payload.proxy_settings = JSON.stringify({})
 
     await this.ctx.database.set('memesluna_endpoints', { name }, payload)
     return true
@@ -930,13 +967,8 @@ export class MemesLunaService extends Service {
     const lines: string[] = []
 
     for (const endpoint of endpoints) {
-      const queryPart = endpoint.queryParams
-        .filter((param) => param.required)
-        .map((param) => `${param.name}=<${param.name}>`)
-        .join('&')
-      const suffix = queryPart ? `?${queryPart}` : ''
       const desc = endpoint.description || endpoint.name
-      lines.push(`- 端点名: ${endpoint.name} | 描述: ${desc} | 接口地址: ${backendPath}/${endpoint.name}${suffix}`)
+      lines.push(`- 端点名: ${endpoint.name} | 描述: ${desc} | 接口地址: ${backendPath}/${endpoint.name}`)
     }
 
     for (const collection of collections) {
@@ -983,6 +1015,11 @@ declare module 'koishi' {
       public_url: string
       mime: string
       created_at: Date
+    }
+    memesluna_collection_stats: {
+      collection: string
+      api_call_count: number
+      updated_at: Date
     }
   }
 }

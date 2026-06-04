@@ -5,31 +5,8 @@ import type {} from '@koishijs/plugin-console'
 import type {} from 'koishi-plugin-chatluna'
 
 import { Context, h } from 'koishi'
-import { Config, ProxySettings, QueryParamConfig } from './config'
+import { Config } from './config'
 import { MemesLunaService, isReservedPath } from './service'
-
-const IMAGE_URL_REGEXP = /\.(jpeg|jpg|gif|png|webp|bmp|svg)(\?.*)?$/i
-
-function getValueByDotNotation(obj: unknown, dotPath?: string): unknown {
-  if (!dotPath) return undefined
-  const parts = dotPath.split('.').filter(Boolean)
-  let current: unknown = obj
-
-  for (const part of parts) {
-    if (current && typeof current === 'object' && !Array.isArray(current)) {
-      current = (current as Record<string, unknown>)[part]
-      continue
-    }
-    return undefined
-  }
-
-  return current
-}
-
-function normalizeContentType(contentType: string | null | undefined): string {
-  if (!contentType) return ''
-  return contentType.toLowerCase().split(';')[0].trim()
-}
 
 function guessMimeByExt(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase()
@@ -48,100 +25,6 @@ function guessMimeByExt(filePath: string): string {
     case '.jpeg':
     default:
       return 'image/jpeg'
-  }
-}
-
-async function handleProxyRequest(targetUrl: string, proxySettings: ProxySettings = {}) {
-  try {
-    const response = await fetch(targetUrl, {
-      method: 'GET',
-      headers: {
-        accept: 'application/json, text/plain, */*',
-      },
-      signal: AbortSignal.timeout(15000),
-    })
-
-    const status = response.status
-    const contentType = normalizeContentType(response.headers.get('content-type'))
-
-    if (status >= 400) {
-      if (contentType === 'application/json') {
-        try {
-          return {
-            status,
-            body: await response.json(),
-            contentType: 'application/json',
-          }
-        } catch {
-          return {
-            status,
-            body: { error: `Target API error (${status})` },
-            contentType: 'application/json',
-          }
-        }
-      }
-
-      return {
-        status,
-        body: { error: `Target API error (${status})` },
-        contentType: 'application/json',
-      }
-    }
-
-    let jsonObject: unknown = undefined
-    if (contentType === 'application/json') {
-      try {
-        jsonObject = await response.json()
-      } catch {
-        jsonObject = undefined
-      }
-    }
-
-    const imageUrlField =
-      typeof proxySettings.imageUrlField === 'string' ? proxySettings.imageUrlField : undefined
-    const candidate = imageUrlField ? getValueByDotNotation(jsonObject, imageUrlField) : undefined
-
-    if (typeof candidate === 'string' && IMAGE_URL_REGEXP.test(candidate)) {
-      return {
-        redirectTo: candidate,
-      }
-    }
-
-    const fallbackAction =
-      proxySettings.fallbackAction === 'error' ? 'error' : 'returnJson'
-
-    if (fallbackAction === 'error') {
-      return {
-        status: 404,
-        body: { error: 'Could not extract image URL' },
-        contentType: 'application/json',
-      }
-    }
-
-    if (jsonObject !== undefined) {
-      return {
-        status,
-        body: jsonObject,
-        contentType: 'application/json',
-      }
-    }
-
-    return {
-      status,
-      body: await response.text(),
-      contentType: contentType || 'text/plain',
-    }
-  } catch (error) {
-    const message = (error as Error).message || 'Proxy setup failed'
-    const isTimeout =
-      message.toLowerCase().includes('timeout') ||
-      (error instanceof DOMException && error.name === 'TimeoutError')
-
-    return {
-      status: isTimeout ? 504 : 500,
-      body: { error: isTimeout ? 'Proxy request timeout' : 'Proxy setup failed' },
-      contentType: 'application/json',
-    }
   }
 }
 
@@ -194,7 +77,7 @@ async function applyDynamicForward(
   config: Config,
   service: MemesLunaService,
   routeName: string,
-  query: Record<string, unknown>,
+  _query: Record<string, unknown>,
   requestOrigin?: string
 ) {
   const endpoint = await service.getEndpointByName(routeName)
@@ -205,102 +88,6 @@ async function applyDynamicForward(
   }
 
   if (endpoint) {
-    const urlConstruction = endpoint.urlConstruction || 'normal'
-
-    if (urlConstruction === 'special_forward') {
-      const target = typeof query.url === 'string' ? query.url : undefined
-      const fieldFromQuery = typeof query.field === 'string' ? query.field : undefined
-      const defaultField = endpoint.proxySettings.imageUrlFieldFromParamDefault || 'url'
-      const field = fieldFromQuery || defaultField
-
-      if (!target) {
-        return {
-          status: 400,
-          body: { error: 'Missing url parameter' },
-          contentType: 'application/json',
-        }
-      }
-
-      return await handleProxyRequest(target, {
-        ...endpoint.proxySettings,
-        imageUrlField: field,
-      })
-    }
-
-    if (urlConstruction === 'special_pollinations') {
-      const tags = typeof query.tags === 'string' ? query.tags : undefined
-      if (!tags) {
-        return {
-          status: 400,
-          body: { error: 'Missing tags parameter' },
-          contentType: 'application/json',
-        }
-      }
-
-      const modelName = endpoint.modelName || ''
-      const prefix = endpoint.url || ''
-      const promptUrl = `${prefix}${encodeURIComponent(tags)}?&model=${encodeURIComponent(modelName)}&nologo=true`
-
-      return { redirectTo: promptUrl }
-    }
-
-    if (urlConstruction === 'special_draw_redirect') {
-      const tags = typeof query.tags === 'string' ? query.tags : undefined
-      if (!tags) {
-        return {
-          status: 400,
-          body: { error: 'Missing tags parameter' },
-          contentType: 'application/json',
-        }
-      }
-
-      const defaultModel =
-        endpoint.queryParams.find((item) => item.name === 'model')?.defaultValue || 'flux'
-      const model =
-        typeof query.model === 'string' && query.model.trim().length > 0
-          ? query.model
-          : defaultModel
-
-      return {
-        redirectTo: `${config.backendPath}/${encodeURIComponent(model)}?tags=${encodeURIComponent(tags)}`,
-      }
-    }
-
-    const validated = new URLSearchParams()
-    const errors: string[] = []
-
-    for (const param of endpoint.queryParams) {
-      const name = param.name
-      const raw = query[name]
-      const value = Array.isArray(raw) ? raw[0] : raw
-
-      if (typeof value === 'string') {
-        if (param.validValues && param.validValues.length > 0 && !param.validValues.includes(value)) {
-          errors.push(`Invalid value for '${name}'`)
-        } else {
-          validated.set(name, value)
-        }
-        continue
-      }
-
-      if (param.required) {
-        errors.push(`Missing required parameter: ${name}`)
-        continue
-      }
-
-      if (param.defaultValue !== undefined) {
-        validated.set(name, param.defaultValue)
-      }
-    }
-
-    if (errors.length > 0) {
-      return {
-        status: 400,
-        body: { error: 'Invalid parameters', details: errors },
-        contentType: 'application/json',
-      }
-    }
-
     if (!endpoint.url) {
       return {
         status: 500,
@@ -309,16 +96,7 @@ async function applyDynamicForward(
       }
     }
 
-    const target = new URL(endpoint.url)
-    for (const [k, v] of validated) {
-      target.searchParams.set(k, v)
-    }
-
-    if (endpoint.method === 'proxy') {
-      return await handleProxyRequest(target.toString(), endpoint.proxySettings)
-    }
-
-    return { redirectTo: target.toString() }
+    return { redirectTo: endpoint.url }
   }
 
   const resource = await service.getRandomResource(routeName)
@@ -326,34 +104,22 @@ async function applyDynamicForward(
     return { notFound: true }
   }
 
-  const method = endpoint ? endpoint.method : 'redirect'
+  await service.incrementCollectionApiCallCount(routeName)
 
-  if (method === 'redirect') {
-    if (resource.type === 'external') {
-      return { redirectTo: resource.value }
+  if (resource.type === 'external') {
+    return { redirectTo: resource.value }
+  }
+
+  if (resource.type === 'storage') {
+    if (resource.public_url) {
+      return { redirectTo: resource.public_url }
     }
-    if (resource.type === 'storage') {
-      if (resource.public_url) {
-        return { redirectTo: resource.public_url }
-      }
-      const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
-      return { redirectTo: localUrl }
-    }
-    // local file
     const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
     return { redirectTo: localUrl }
-  } else {
-    // proxy mode
-    const img = await service.getLocalImageBuffer(routeName, resource.filename || '')
-    if (!img) {
-      return { notFound: true }
-    }
-    return {
-      status: 200,
-      body: img.buffer,
-      contentType: img.mime,
-    }
   }
+
+  const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
+  return { redirectTo: localUrl }
 }
 
 function setKoaResponse(koa: any, result: any) {
@@ -400,43 +166,6 @@ function toStringArray(value: unknown): string[] {
   return value
     .map((item) => (typeof item === 'string' ? item.trim() : ''))
     .filter((item) => item.length > 0)
-}
-
-function parseJsonLike<T>(value: unknown, fallback: T): T {
-  if (value === null || value === undefined) return fallback
-  if (typeof value === 'string') {
-    const text = value.trim()
-    if (!text) return fallback
-    try {
-      return JSON.parse(text) as T
-    } catch {
-      return fallback
-    }
-  }
-  if (typeof value === 'object') {
-    return value as T
-  }
-  return fallback
-}
-
-function normalizeForwardMethod(value: unknown): 'redirect' | 'proxy' {
-  return toTrimmedString(value) === 'proxy' ? 'proxy' : 'redirect'
-}
-
-function normalizeUrlConstruction(value: unknown):
-  | 'normal'
-  | 'special_forward'
-  | 'special_pollinations'
-  | 'special_draw_redirect' {
-  const normalized = toTrimmedString(value)
-  if (
-    normalized === 'special_forward' ||
-    normalized === 'special_pollinations' ||
-    normalized === 'special_draw_redirect'
-  ) {
-    return normalized
-  }
-  return 'normal'
 }
 
 async function buildAdminState(service: MemesLunaService) {
@@ -819,11 +548,7 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
       group: toTrimmedString(body.group) || '默认分组',
       description: toTrimmedString(body.description),
       url,
-      method: normalizeForwardMethod(body.method),
-      urlConstruction: normalizeUrlConstruction(body.urlConstruction),
-      modelName: toTrimmedString(body.modelName),
-      queryParams: parseJsonLike<QueryParamConfig[]>(body.queryParams, []),
-      proxySettings: parseJsonLike<ProxySettings>(body.proxySettings, { fallbackAction: 'returnJson' }),
+      method: 'redirect' as const,
     }
 
     try {
@@ -844,14 +569,7 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     if (body.group !== undefined) payload.group = toTrimmedString(body.group) || '默认分组'
     if (body.description !== undefined) payload.description = toTrimmedString(body.description)
     if (body.url !== undefined) payload.url = toTrimmedString(body.url)
-    if (body.method !== undefined) payload.method = normalizeForwardMethod(body.method)
-    if (body.urlConstruction !== undefined)
-      payload.urlConstruction = normalizeUrlConstruction(body.urlConstruction)
-    if (body.modelName !== undefined) payload.modelName = toTrimmedString(body.modelName)
-    if (body.queryParams !== undefined)
-      payload.queryParams = parseJsonLike<QueryParamConfig[]>(body.queryParams, [])
-    if (body.proxySettings !== undefined)
-      payload.proxySettings = parseJsonLike<ProxySettings>(body.proxySettings, { fallbackAction: 'returnJson' })
+    payload.method = 'redirect'
 
     const updated = await service.updateEndpoint(currentName, payload)
     if (!updated) {

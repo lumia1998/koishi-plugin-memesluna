@@ -1,26 +1,5 @@
 import { Schema } from 'koishi'
 
-export interface QueryParamConfig {
-  name: string
-  required?: boolean
-  defaultValue?: string
-  validValues?: string[]
-}
-
-export interface ProxySettings {
-  imageUrlField?: string
-  imageUrlFieldFromParamDefault?: string
-  fallbackAction?: 'returnJson' | 'error'
-}
-
-export type ForwardMethod = 'redirect' | 'proxy'
-
-export type UrlConstruction =
-  | 'normal'
-  | 'special_forward'
-  | 'special_pollinations'
-  | 'special_draw_redirect'
-
 export interface Config {
   backendPath: string
   storagePath?: string

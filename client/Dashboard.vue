@@ -86,17 +86,36 @@
           <!-- Collection Lists (Folder view) -->
           <div v-if="!currentCollection" class="collections-folder-view">
             <!-- Creator bar in Notion Style -->
-            <div class="notion-db-header">
-              <h2 class="notion-db-title">📦 表情包仓库</h2>
-              <div class="notion-db-actions">
-                <input 
-                  v-model="newCollectionName"
-                  class="flat-input collection-name-input-notion"
-                  placeholder="输入名称并回车创建..." 
-                  @keyup.enter="createCollection"
-                />
+            <div class="notion-db-header page-section-header collection-list-header">
+              <div>
+                <h1 class="notion-main-title">表情包管理</h1>
+                <p class="section-desc compact">管理表情包合集与图片素材</p>
+              </div>
+              <div class="notion-db-actions collection-toolbar">
+                <div class="collection-search-shell">
+                  <svg class="collection-toolbar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <path d="m21 21-4.3-4.3"></path>
+                  </svg>
+                  <input
+                    v-model="collectionSearchQuery"
+                    class="flat-input collection-search-input"
+                    placeholder="搜索表情包合集..."
+                  />
+                </div>
+                <label class="collection-filter-shell">
+                  <svg class="collection-toolbar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 4h18l-7 8v6l-4 2v-8z"></path>
+                  </svg>
+                  <select v-model="collectionFilter" class="flat-select collection-filter-select" aria-label="筛选表情包合集">
+                    <option value="all">全部</option>
+                    <option value="local">仅本地</option>
+                    <option value="external">含外链</option>
+                  </select>
+                </label>
                 <button @click="createCollection" class="btn btn-primary btn-notion">
-                  + 新建表情包
+                  <span class="btn-plus">+</span>
+                  新建表情包
                 </button>
               </div>
             </div>
@@ -106,34 +125,63 @@
             <div v-if="!collections.length" class="empty-placeholder-card">
               <div class="empty-icon">📁</div>
               <h3>尚未创建任何表情包</h3>
-              <p>在右侧输入表情包名称即可快速创建一个新的表情包。</p>
+              <p>点击右上角按钮即可快速创建一个新的表情包合集。</p>
             </div>
-            
+
+            <div v-else-if="!filteredCollections.length" class="empty-placeholder-card">
+              <div class="empty-icon">🔎</div>
+              <h3>没有匹配的表情包合集</h3>
+              <p>换个关键词或筛选条件再试试。</p>
+            </div>
+
             <div v-else class="folders-grid">
-              <div 
-                v-for="item in collections" 
+              <div
+                v-for="item in filteredCollections"
                 :key="item.name"
                 class="folder-card"
                 @click="enterCollectionDetail(item)"
               >
-                <div class="folder-header">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                  </svg>
+                <div :class="['folder-cover', getCollectionCardPreviewImages(item.name).length ? 'has-preview' : 'empty']">
+                  <template v-if="getCollectionCardPreviewImages(item.name).length">
+                    <img
+                      v-for="src in getCollectionCardPreviewImages(item.name)"
+                      :key="src"
+                      :src="src"
+                      class="folder-cover-img"
+                      loading="lazy"
+                      :alt="`${item.name} 预览图`"
+                    />
+                  </template>
+                  <div v-else class="folder-cover-empty">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                  </div>
+                  <span v-if="getCollectionPreviewState(item.name)?.loading" class="folder-cover-badge">同步中</span>
                 </div>
                 
                 <div class="folder-body">
-                  <div>
-                    <div class="folder-name">{{ item.name }}</div>
-                    <div class="folder-desc" :title="item.description">
-                      {{ item.description || '暂无描述信息' }}
+                  <div class="folder-title-row">
+                    <div class="folder-name" :title="item.description || item.name">{{ item.name }}</div>
+                    <button class="folder-more-btn" title="更多操作" @click.stop="toggleCollectionMenu(item.name)">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="5" cy="12" r="1"></circle>
+                        <circle cx="12" cy="12" r="1"></circle>
+                        <circle cx="19" cy="12" r="1"></circle>
+                      </svg>
+                    </button>
+                    <div v-if="activeCollectionMenu === item.name" class="folder-action-menu" @click.stop>
+                      <button @click="enterCollectionDetail(item)">打开详情</button>
+                      <button class="danger" @click="confirmDeleteCollection(item.name)">删除表情包</button>
                     </div>
                   </div>
-                  
-                  <div class="folder-footer">
-                    <span class="folder-meta">本地: {{ item.localCount }} · 外链: {{ item.linkCount }}</span>
-                    <span class="folder-manage-link">
-                      管理 <svg class="chevron-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                  <div class="folder-count">{{ item.totalCount }} 张图片</div>
+                  <div class="folder-meta-row">
+                    <span class="folder-meta-item">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                      </svg>
+                      本地 {{ item.localCount }} · 外链 {{ item.linkCount }}
                     </span>
                   </div>
                 </div>
@@ -147,71 +195,52 @@
             class="collection-detail-layout"
             @dragover.prevent="dragOver = true"
           >
-            <!-- Notion Document Title Block -->
-            <div class="notion-page-header">
-              <div class="notion-page-header-left">
-                <div class="notion-page-icon">📂</div>
-                <div class="notion-page-title-wrapper">
-                  <h1 class="notion-page-title">表情包: {{ currentCollection.name }}</h1>
-                  <div class="notion-page-meta">
-                    API 端点:
-                    <code class="code-url" @click="copyToClipboard(getBaseRedirectUrl(currentCollection.name))" title="点击复制完整 URL">
-                      {{ getBaseRedirectUrl(currentCollection.name) }}
-                    </code>
-                  </div>
-                </div>
-              </div>
-              <div class="notion-page-header-right">
-                <a :href="getBaseRedirectUrl(currentCollection.name)" target="_blank" class="btn-test-link" title="测试">
-                  ⚡ 测试
-                </a>
-              </div>
-            </div>
-
-            <!-- Page Action Toolbar -->
-            <div class="notion-page-toolbar">
-              <button @click="exitCollectionDetail" class="toolbar-btn">
-                ◀ 返回列表
-              </button>
-              <button @click="refreshCollectionResources" class="toolbar-btn">
-                🔄 刷新缓存
-              </button>
-              <div class="toolbar-divider"></div>
-              <button @click="confirmDeleteCollection(currentCollection.name)" class="toolbar-btn danger">
-                🗑️ 删除表情包
-              </button>
-            </div>
-
-            <!-- Notion Page Properties Block -->
-            <div class="notion-properties-panel">
-              <div class="property-row">
-                <div class="property-label">
-                  <span class="prop-icon">📝</span> 表情包描述
-                </div>
-                <div class="property-value">
-                  <input 
-                    v-model="newDescription" 
-                    class="property-input-text" 
-                    placeholder="回车或失去焦点即可自动保存描述（帮助 AI 理解该表情包属性）..."
-                    @blur="saveCollectionDescription"
-                    @keyup.enter="saveCollectionDescription"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <!-- Upload and Batch Import Area (Notion Callout style) -->
-            <div class="notion-callout upload-callout mt-4">
-              <div class="callout-icon">📤</div>
-              <div class="callout-content">
-                <div class="callout-title">上传与导入图片素材</div>
-                <div class="callout-desc">拖放本地图片文件至页面任何位置，或手动选择文件进行上传。单张限制 10MB。</div>
-                <div class="callout-actions">
-                  <button @click="triggerFileInput" class="btn btn-secondary btn-small">
-                    选择本地文件
+            <div class="asset-detail-shell">
+              <div class="detail-topbar">
+                <div class="detail-breadcrumbs">
+                  <button @click="exitCollectionDetail" class="detail-back-btn" title="返回列表">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="m15 18-6-6 6-6"></path>
+                    </svg>
+                    返回列表
                   </button>
-                  <button @click="showImportLinks = !showImportLinks" class="btn btn-secondary btn-small">
-                    {{ showImportLinks ? '收起外链导入' : '批量导入外链' }}
+                  <span class="detail-separator">/</span>
+                  <span class="detail-crumb-current">{{ currentCollection.name }}</span>
+                  <span class="detail-separator">/</span>
+                  <span class="detail-crumb-strong">图片素材</span>
+                </div>
+
+                <div class="detail-top-actions">
+                  <button @click="refreshCollectionResources" class="asset-btn secondary" title="刷新缓存">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+                      <path d="M3 21v-5h5"></path>
+                      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+                      <path d="M16 8h5V3"></path>
+                    </svg>
+                    刷新缓存
+                  </button>
+                  <button @click="triggerFileInput" class="asset-btn primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <path d="m17 8-5-5-5 5"></path>
+                      <path d="M12 3v12"></path>
+                    </svg>
+                    上传图片
+                  </button>
+                  <button @click="showImportLinks = !showImportLinks" class="asset-btn secondary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                    </svg>
+                    导入外链
+                  </button>
+                  <button @click="confirmDeleteCollection(currentCollection.name)" class="asset-btn danger ghost" title="删除表情包">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M3 6h18"></path>
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>
+                      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
                   </button>
                   <input 
                     ref="fileInput"
@@ -223,7 +252,56 @@
                   />
                 </div>
               </div>
-            </div>
+
+              <section class="asset-hero-panel">
+                <div class="asset-identity-card">
+                  <div class="asset-avatar-frame">
+                    <img v-if="currentCollectionCoverUrl" :src="currentCollectionCoverUrl" class="asset-avatar-img" :alt="`${currentCollection.name} 封面`" />
+                    <div v-else class="asset-avatar-empty">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                      </svg>
+                    </div>
+                  </div>
+                  <div class="asset-title-stack">
+                    <div class="asset-title-row">
+                      <h1>{{ currentCollection.name }}</h1>
+                      <span class="asset-pill">本地</span>
+                    </div>
+                    <input
+                      v-model="newDescription"
+                      class="asset-description-input"
+                      placeholder="添加表情包描述"
+                      @blur="saveCollectionDescription"
+                      @keyup.enter="saveCollectionDescription"
+                    />
+                    <div class="asset-meta-line">
+                      <span>创建于 {{ formatDate(currentCollection.createdAt) }}</span>
+                      <span>最后更新 {{ formatDate(currentCollection.updatedAt) }}</span>
+                      <span>共 {{ currentCollectionTotalCount }} 张图片</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="asset-api-card">
+                  <div class="asset-card-label">API 调用地址</div>
+                  <div class="asset-api-row">
+                    <code>{{ currentCollectionApiUrl }}</code>
+                    <button @click="testCurrentCollectionApi" class="asset-test-btn" :disabled="apiPreviewLoading">
+                      <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M8 5v14l11-7z"></path>
+                      </svg>
+                      {{ apiPreviewLoading ? '测试中' : '测试接口' }}
+                    </button>
+                  </div>
+                  <div class="asset-api-hint">直接访问该链接将随机返回一张表情图片</div>
+                  <div v-if="apiPreviewUrl" class="api-preview-strip">
+                    <img :src="apiPreviewUrl" alt="API 返回图片预览" />
+                    <span>随机预览</span>
+                  </div>
+                </div>
+
+              </section>
 
             <!-- Drag over drop zone area -->
             <div 
@@ -243,84 +321,182 @@
               </div>
             </div>
 
-            <!-- Links Import area -->
-            <div v-show="showImportLinks" class="notion-callout links-import-callout mt-3">
-              <div class="callout-icon">🔗</div>
-              <div class="callout-content w-full">
-                <div class="callout-title">批量导入外链</div>
-                <div class="callout-desc">每行输入一个以 http:// 或 https:// 开头的网络图片链接</div>
+              <div v-show="showImportLinks" class="asset-import-panel">
+                <div class="asset-import-header">
+                  <div>
+                    <div class="asset-import-title">导入外链图片</div>
+                    <div class="asset-import-desc">每行一个以 http:// 或 https:// 开头的图片链接</div>
+                  </div>
+                  <button @click="showImportLinks = false" class="asset-icon-btn compact" title="关闭导入面板">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M18 6 6 18"></path>
+                      <path d="m6 6 12 12"></path>
+                    </svg>
+                  </button>
+                </div>
                 <textarea 
                   v-model="externalLinksText"
                   rows="4"
-                  class="flat-textarea w-full mt-2"
+                  class="asset-link-textarea"
                   placeholder="每行一个以 http:// 或 https:// 开头的链接"
                 ></textarea>
-                <div class="callout-actions mt-2">
-                  <button @click="addExternalLinks" class="btn btn-primary btn-small">确认导入</button>
-                  <button @click="showImportLinks = false" class="btn btn-secondary btn-small">取消</button>
+                <div class="asset-import-actions">
+                  <button @click="addExternalLinks" class="asset-btn primary">确认导入</button>
+                  <button @click="showImportLinks = false" class="asset-btn secondary">取消</button>
                 </div>
               </div>
-            </div>
 
-            <!-- Notion database view tabs switcher -->
-            <div class="gallery-view-switcher mt-4">
-              <button 
-                @click="currentGalleryTab = 'local'"
-                :class="['gallery-tab-btn', currentGalleryTab === 'local' ? 'active' : '']"
-              >
-                📁 本地存储图片 ({{ detailResources.images.length }})
-              </button>
-              <button 
-                @click="currentGalleryTab = 'external'"
-                :class="['gallery-tab-btn', currentGalleryTab === 'external' ? 'active' : '']"
-              >
-                🔗 外部链接直链 ({{ detailResources.links.length }})
-              </button>
-            </div>
+              <section class="asset-gallery-section">
+                <div class="asset-gallery-toolbar">
+                  <div class="asset-tabs">
+                    <button @click="currentGalleryTab = 'all'; currentPage = 1" :class="['asset-tab', currentGalleryTab === 'all' ? 'active' : '']">
+                      全部 <span>{{ currentCollectionTotalCount }}</span>
+                    </button>
+                    <button @click="currentGalleryTab = 'local'; currentPage = 1" :class="['asset-tab', currentGalleryTab === 'local' ? 'active' : '']">
+                      本地图片 <span>{{ detailResources.images.length }}</span>
+                    </button>
+                    <button @click="currentGalleryTab = 'external'; currentPage = 1" :class="['asset-tab', currentGalleryTab === 'external' ? 'active' : '']">
+                      外链图片 <span>{{ detailResources.links.length }}</span>
+                    </button>
+                  </div>
 
-            <!-- Tab Content 1: Local Images Gallery -->
-            <div v-show="currentGalleryTab === 'local'" class="gallery-tab-content">
-              <div v-if="!detailResources.images.length" class="empty-gallery">
-                表情包内尚无任何本地图片资源
+                  <div class="asset-filter-bar">
+                    <div class="asset-search-box">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <path d="m21 21-4.3-4.3"></path>
+                      </svg>
+                      <input v-model="gallerySearch" placeholder="搜索图片或外链" />
+                    </div>
+                    <select v-model="galleryFilter" class="asset-select">
+                      <option value="all">筛选: 全部</option>
+                      <option value="selected">筛选: 已选</option>
+                    </select>
+                    <select v-model="gallerySort" class="asset-select">
+                      <option value="name">排序: 文件名</option>
+                      <option value="nameDesc">排序: 文件名倒序</option>
+                    </select>
+                    <div class="asset-view-toggle">
+                      <button @click="galleryViewMode = 'grid'" :class="galleryViewMode === 'grid' ? 'active' : ''" title="网格视图">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <rect x="3" y="3" width="7" height="7" rx="1"></rect>
+                          <rect x="14" y="3" width="7" height="7" rx="1"></rect>
+                          <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+                          <rect x="14" y="14" width="7" height="7" rx="1"></rect>
+                        </svg>
+                      </button>
+                      <button @click="galleryViewMode = 'list'" :class="galleryViewMode === 'list' ? 'active' : ''" title="列表视图">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M8 6h13"></path>
+                          <path d="M8 12h13"></path>
+                          <path d="M8 18h13"></path>
+                          <path d="M3 6h.01"></path>
+                          <path d="M3 12h.01"></path>
+                          <path d="M3 18h.01"></path>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+            <div class="gallery-tab-content">
+              <div v-if="!detailResources.images.length && !detailResources.links.length" class="empty-gallery">
+                表情包内尚无任何图片资源
+              </div>
+              <div v-else-if="!filteredGalleryItems.length" class="empty-gallery">
+                没有匹配当前搜索或筛选条件的图片
               </div>
               <div v-else>
-                <div class="notion-gallery-grid">
-                  <div 
-                    v-for="img in paginatedImages" 
-                    :key="img"
+                <div v-if="selectedImages.length" class="gallery-bulk-toolbar floating">
+                  <div class="bulk-status">
+                    <span class="bulk-title">本地素材</span>
+                    <span class="bulk-meta">已选择 {{ selectedImages.length }} 张</span>
+                  </div>
+                  <div class="bulk-actions">
+                    <button @click="toggleSelectCurrentPage" class="toolbar-btn compact">
+                      {{ areAllCurrentPageImagesSelected ? '取消本页' : '选择本页' }}
+                    </button>
+                    <button v-if="selectedImages.length" @click="clearSelectedImages" class="toolbar-btn compact">
+                      清空选择
+                    </button>
+                    <div v-if="selectedImages.length" class="bulk-move-group">
+                      <select v-model="bulkMoveTarget" class="flat-select compact-select">
+                        <option value="">移动到...</option>
+                        <option
+                          v-for="targetCol in collections"
+                          :key="targetCol.name"
+                          :value="targetCol.name"
+                          :disabled="targetCol.name === currentCollection.name"
+                        >
+                          {{ targetCol.name }}
+                        </option>
+                      </select>
+                      <button @click="moveSelectedImages" class="toolbar-btn compact" :disabled="!bulkMoveTarget">
+                        移动
+                      </button>
+                    </div>
+                    <button class="toolbar-btn compact" disabled>设置标签</button>
+                    <button v-if="selectedImages.length" @click="deleteSelectedImages" class="toolbar-btn compact danger">
+                      批量删除
+                    </button>
+                  </div>
+                </div>
+
+                <div :class="['notion-gallery-grid', galleryViewMode === 'list' ? 'list-mode' : '']">
+                  <div
+                    v-for="item in paginatedGalleryItems"
+                    :key="item.id"
                     class="notion-gallery-card"
-                    :class="{ 'notion-gallery-card-active-dropdown': activeMoveDropdown === img }"
+                    :class="{
+                      'notion-gallery-card-active-dropdown': item.type === 'local' && activeMoveDropdown === item.value,
+                      'selected': item.type === 'local' && isImageSelected(item.value),
+                      'external': item.type === 'external'
+                    }"
                   >
-                    <div 
-                      class="gallery-img-container"
-                      @click="openImage(getLocalImageApiUrl(currentCollection.name, img))"
-                      style="cursor: pointer;"
-                      title="在新标签页中打开原图"
+                    <button
+                      v-if="item.type === 'local'"
+                      class="gallery-select-toggle"
+                      @click.stop="toggleImageSelection(item.value)"
+                      :title="isImageSelected(item.value) ? '取消选择' : '选择图片'"
                     >
-                      <img 
-                        :src="getLocalImageApiUrl(currentCollection.name, img)" 
-                        class="gallery-img" 
-                        loading="lazy" 
+                      <svg v-if="isImageSelected(item.value)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                      </svg>
+                    </button>
+                    <div
+                      class="gallery-img-container"
+                      @click="handleGalleryItemClick(item)"
+                      style="cursor: pointer;"
+                      :title="item.type === 'local' && selectedImages.length ? '切换选择状态' : '在新标签页中打开原图'"
+                    >
+                      <img
+                        :src="item.src"
+                        class="gallery-img"
+                        loading="lazy"
                       />
+                      <span class="image-format-badge" :class="item.type">{{ item.type === 'external' ? 'LINK' : getImageExtension(item.value) }}</span>
+                    </div>
+                    <div class="gallery-list-meta">
+                      <div>{{ item.label }}</div>
+                      <span>{{ item.type === 'external' ? '外链图片' : getImageExtension(item.value) }}</span>
                     </div>
 
-                    <!-- Hover overlay on card (actions) -->
                     <div class="gallery-card-overlay">
-                      <div class="overlay-actions">
+                      <div v-if="item.type === 'local'" class="overlay-actions">
                         <div 
                           class="card-action-btn move move-dropdown-container"
-                          @click.stop="toggleMoveDropdown(img)"
+                          @click.stop="toggleMoveDropdown(item.value)"
                         >
                           <span>修改</span>
                           <div 
                             class="move-dropdown-menu"
-                            v-show="activeMoveDropdown === img"
+                            v-show="activeMoveDropdown === item.value"
                           >
                             <template v-for="targetCol in collections">
                               <button 
                                 v-if="targetCol.name !== currentCollection.name"
                                 :key="targetCol.name"
-                                @click.stop="moveImage(currentCollection.name, targetCol.name, img)"
+                                @click.stop="moveImage(currentCollection.name, targetCol.name, item.value)"
                                 class="dropdown-item"
                               >
                                 {{ targetCol.name }}
@@ -329,8 +505,22 @@
                           </div>
                         </div>
                         
-                        <button 
-                          @click.stop="confirmDeleteImage(currentCollection.name, img)" 
+                        <button
+                          @click.stop="confirmDeleteImage(currentCollection.name, item.value)"
+                          class="card-action-btn danger"
+                        >
+                          删除
+                        </button>
+                      </div>
+                      <div v-else class="overlay-actions">
+                        <button
+                          @click.stop="copyToClipboard(item.value)"
+                          class="card-action-btn"
+                        >
+                          复制
+                        </button>
+                        <button
+                          @click.stop="deleteExternalLink(currentCollection.name, item.value)"
                           class="card-action-btn danger"
                         >
                           删除
@@ -340,7 +530,6 @@
                   </div>
                 </div>
 
-                <!-- Pagination bar -->
                 <div v-if="totalPages > 1" class="pagination-container">
                   <button 
                     :disabled="currentPage === 1" 
@@ -361,47 +550,7 @@
               </div>
             </div>
 
-            <!-- Tab Content 2: External Links List -->
-            <div v-show="currentGalleryTab === 'external'" class="gallery-tab-content">
-              <div v-if="!detailResources.links.length" class="empty-gallery">
-                表情包内尚未配置任何外部直链图片
-              </div>
-              <div v-else class="links-list-container">
-                <div 
-                  v-for="link in detailResources.links" 
-                  :key="link"
-                  class="link-item-row"
-                >
-                  <div class="link-url-wrapper">
-                    <span class="bullet">•</span>
-                    <span class="link-url-text truncate" @click="copyToClipboard(link)">
-                      {{ link }}
-                    </span>
-                  </div>
-                  <div class="link-actions">
-                    <button 
-                      @click="copyToClipboard(link)"
-                      class="icon-btn hover-bg"
-                      title="复制直链链接"
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                      </svg>
-                    </button>
-                    <button 
-                      @click="deleteExternalLink(currentCollection.name, link)"
-                      class="icon-btn hover-danger"
-                      title="删除该外链"
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="3 6 5 6 21 6"></polyline>
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              </div>
+              </section>
             </div>
 
           </div>
@@ -409,21 +558,34 @@
 
         <!-- MENU VIEW 2: DISTRIBUTION (🌐) -->
         <div v-else-if="activeMenu === 'distribution'" class="distribution-router-view">
-          <div class="notion-title-row">
-            <h1 class="notion-main-title">🌐 接口分发与路由管理</h1>
+          <div class="notion-db-header page-section-header">
+            <div>
+              <h1 class="notion-main-title">分发管理</h1>
+              <p class="section-desc compact">管理统一重定向端点与外部目标地址</p>
+            </div>
+            <button @click="openEndpointEditor" class="btn btn-primary btn-notion">
+              + 新建端点
+            </button>
           </div>
-          <p class="section-desc">通过配置以下分发 API 端点，可以用统一的本地路由分发或代理外部直链。</p>
           <hr class="notion-hr" />
 
-          <div class="dashboard-grid">
+          <div class="endpoint-layout">
             
             <!-- Endpoint Editor Form Panel -->
-            <div class="notion-form-panel">
-              <h2 class="notion-panel-title">
-                {{ editingEndpoint ? '📝 编辑分发端点' : '➕ 创建新分发端点' }}
-              </h2>
+            <div v-show="showEndpointEditor" class="notion-form-panel endpoint-editor-panel">
+              <div class="panel-title-row">
+                <h2 class="notion-panel-title">
+                  {{ editingEndpoint ? '编辑分发端点' : '创建新分发端点' }}
+                </h2>
+                <button @click="closeEndpointEditor" class="icon-btn hover-bg" title="收起编辑器">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
               
-              <div class="form-fields">
+              <div class="form-fields endpoint-form-grid">
                 <div class="form-group">
                   <label>端点名称 *</label>
                   <input 
@@ -444,7 +606,7 @@
                   />
                 </div>
 
-                <div class="form-group">
+                <div class="form-group span-2">
                   <label>目标 URL *</label>
                   <input 
                     v-model="endpointForm.url" 
@@ -453,11 +615,16 @@
                   />
                 </div>
 
-                <div class="form-actions">
+                <div class="endpoint-preview span-2">
+                  <span>访问预览</span>
+                  <code @click="copyToClipboard(endpointPreviewUrl)">{{ endpointPreviewUrl || '填写端点名称后生成预览' }}</code>
+                </div>
+
+                <div class="form-actions span-2">
                   <button @click="saveEndpoint" class="btn btn-primary flex-grow">
                     {{ editingEndpoint ? '保存修改' : '立即创建' }}
                   </button>
-                  <button @click="resetEndpointForm" class="btn btn-secondary">
+                  <button @click="closeEndpointEditor" class="btn btn-secondary">
                     取消
                   </button>
                 </div>
@@ -466,19 +633,24 @@
 
             <!-- Endpoints Table List -->
             <div class="notion-table-panel">
+              <div class="table-title-row">
+                <h2 class="notion-panel-title">端点列表</h2>
+                <span class="table-count">{{ endpoints.length }} 条路由</span>
+              </div>
               <div class="table-container">
                 <table class="flat-table">
                   <thead>
                     <tr>
-                      <th style="width: 20%">名称</th>
-                      <th style="width: 25%">描述</th>
-                      <th style="width: 40%">访问路径 & 转发目标</th>
-                      <th style="width: 15%; text-align: right">管理</th>
+                      <th style="width: 18%">名称</th>
+                      <th style="width: 20%">描述</th>
+                      <th style="width: 17%">方式</th>
+                      <th style="width: 35%">访问路径 & 转发目标</th>
+                      <th style="width: 10%; text-align: right">管理</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr v-if="!endpoints.length">
-                      <td colspan="4" class="empty-cell">尚未配置任何转发 API 端点</td>
+                      <td colspan="5" class="empty-cell">尚未配置任何转发 API 端点</td>
                     </tr>
                     <tr v-for="item in endpoints" :key="item.name">
                       <td>
@@ -486,6 +658,10 @@
                       </td>
                       <td class="cell-desc" :title="item.description">
                         {{ item.description || '-' }}
+                      </td>
+                      <td>
+                        <span class="method-tag redirect">重定向</span>
+                        <div class="target-url">302 重定向</div>
                       </td>
                       <td class="font-mono">
                         <div class="url-line">
@@ -537,31 +713,105 @@
 
         <!-- MENU VIEW 3: PREVIEW (👁️ 预览) -->
         <div v-else-if="activeMenu === 'settings'" class="settings-router-view">
-          <div class="settings-centered-layout">
-
-            <!-- Centered: Interactive AI Prompt Variables Preview -->
-            <div class="settings-preview-panel">
-              <div class="notion-title-row">
-                <h1 class="notion-main-title">✨ ChatLuna AI 变量注入预览</h1>
+          <div class="settings-preview-panel">
+            <div class="notion-db-header page-section-header preview-page-header">
+              <div>
+                <h1 class="notion-main-title">预览</h1>
+                <p class="section-desc compact">实时预览路由与最终提示词效果</p>
               </div>
-              <p class="section-desc">当配置为注入变量时，系统会将当前的表情仓库自动以 Notion 图库的规格变量形式拼接，以下是注入 AI 提示词上下文的真实呈现。</p>
-              <hr class="notion-hr" />
-              
-              <div class="preview-prompt-container mt-4">
-                <div class="preview-sub-title">注入变量：{endpoint} (格式化后的可用图床表情包)</div>
-                <div class="preview-code-block">
-                  <pre v-if="routeInventoryText">{{ routeInventoryText }}</pre>
-                  <pre v-else class="text-gray-muted">- 暂无可用表情包及路由，请前往表情包管理或分发管理中创建 -</pre>
+              <button @click="fetchSettingsPreview" class="btn btn-secondary btn-notion">
+                刷新预览
+              </button>
+            </div>
+
+            <div class="preview-dashboard-grid">
+              <section class="preview-card route-table-card">
+                <div class="preview-card-header">
+                  <div>
+                    <div class="preview-card-title">路由清单</div>
+                    <div class="preview-card-desc">{endpoint} 中可供 ChatLuna 使用的合集与端点</div>
+                  </div>
+                  <button @click="copyToClipboard(routeInventoryText)" class="preview-action-btn" :disabled="!routeInventoryText" title="复制路由清单">
+                    复制清单
+                  </button>
                 </div>
 
-                <div class="preview-sub-title mt-4">最终组合注入：{memesluna} (发送给 LLM 提示词全貌)</div>
-                <div class="preview-code-block final-prompt">
+                <div v-if="previewRouteRows.length" class="preview-table-wrap">
+                  <table class="preview-route-table">
+                    <thead>
+                      <tr>
+                        <th>预览</th>
+                        <th>包名</th>
+                        <th>描述</th>
+                        <th>路径</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="row in previewRouteRows" :key="row.id">
+                        <td>
+                          <div v-if="row.previewImages.length" :class="['preview-mini-cover', row.previewImages.length === 1 ? 'single' : '']">
+                            <img
+                              v-for="src in row.previewImages"
+                              :key="src"
+                              :src="src"
+                              :alt="`${row.name} 预览`"
+                              loading="lazy"
+                              @error="handlePreviewImageError(row)"
+                            />
+                          </div>
+                          <div v-else :class="['preview-route-icon', row.type]">
+                            {{ row.type === 'collection' ? '包' : 'API' }}
+                          </div>
+                        </td>
+                        <td>
+                          <div class="preview-route-name">{{ row.name }}</div>
+                          <span :class="['preview-route-type', row.type]">{{ row.typeLabel }}</span>
+                        </td>
+                        <td>
+                          <div class="preview-route-desc" :title="row.description">{{ row.description }}</div>
+                        </td>
+                        <td>
+                          <code class="preview-route-path" :title="row.fullUrl" @click="copyToClipboard(row.fullUrl)">{{ row.path }}</code>
+                        </td>
+                        <td>
+                          <div class="preview-row-actions">
+                            <a :href="row.fullUrl" target="_blank" class="icon-btn hover-bg" title="打开预览">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                                <polyline points="15 3 21 3 21 9"></polyline>
+                                <line x1="10" y1="14" x2="21" y2="3"></line>
+                              </svg>
+                            </a>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div v-else class="preview-empty-state">
+                  暂无可用表情包及路由，请前往表情包管理或分发管理中创建。
+                </div>
+              </section>
+
+              <section class="preview-card prompt-card">
+                <div class="preview-card-header">
+                  <div>
+                    <div class="preview-card-title">最终提示词</div>
+                    <div class="preview-card-desc">{memesluna} 注入给 LLM 的完整文本</div>
+                  </div>
+                  <button @click="copyToClipboard(llmPromptPreview)" class="preview-action-btn" :disabled="!llmPromptPreview" title="复制最终提示词">
+                    复制提示词
+                  </button>
+                </div>
+
+                <div class="preview-code-block final-prompt polished">
                   <pre v-if="llmPromptPreview">{{ llmPromptPreview }}</pre>
                   <pre v-else class="text-gray-muted">- 正在获取最终提示词预览... -</pre>
                 </div>
-              </div>
+              </section>
             </div>
-
           </div>
         </div>
 
@@ -575,6 +825,51 @@
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { send } from '@koishijs/client'
 
+interface CollectionInfo {
+  name: string
+  description: string
+  totalCount: number
+  localCount: number
+  linkCount: number
+  hasContent: boolean
+  createdAt?: string | Date
+  updatedAt?: string | Date
+  apiCallCount?: number
+  cover?: string
+}
+
+interface EndpointInfo {
+  name: string
+  group?: string
+  description?: string
+  url: string
+  method?: 'redirect'
+}
+
+interface CollectionPreviewState {
+  loading: boolean
+  images: string[]
+}
+
+interface AssetGalleryItem {
+  id: string
+  type: 'local' | 'external'
+  label: string
+  src: string
+  value: string
+}
+
+interface PreviewRouteRow {
+  id: string
+  type: 'collection' | 'endpoint'
+  typeLabel: string
+  name: string
+  description: string
+  path: string
+  fullUrl: string
+  previewImages: string[]
+}
+
 // Navigation states
 const activeMenu = ref<'resources' | 'distribution' | 'settings'>('resources')
 const loading = ref(true)
@@ -582,32 +877,43 @@ const loading = ref(true)
 // Core state data
 const backendPath = ref('/memesluna')
 const baseUrl = ref('http://localhost:5140')
-const endpoints = ref<any[]>([])
-const collections = ref<any[]>([])
-const config = ref<any>(null)
+const endpoints = ref<EndpointInfo[]>([])
+const collections = ref<CollectionInfo[]>([])
 
 // Endpoint Forms reactivity
-const editingEndpoint = ref<any | null>(null)
+const showEndpointEditor = ref(false)
+const editingEndpoint = ref<EndpointInfo | null>(null)
 const endpointForm = reactive({
   name: '',
   group: '',
   description: '',
   url: '',
-  method: 'redirect',
-  urlConstruction: 'normal'
 })
+const failedEndpointPreviewIds = ref<Set<string>>(new Set())
 
 // Collection router states
 const newCollectionName = ref('')
 const currentCollection = ref<any | null>(null)
+const collectionSearchQuery = ref('')
+const collectionFilter = ref<'all' | 'local' | 'external'>('all')
+const activeCollectionMenu = ref<string | null>(null)
 const newDescription = ref('')
 const externalLinksText = ref('')
 const detailResources = reactive({
   images: [] as string[],
   links: [] as string[]
 })
-const currentGalleryTab = ref<'local' | 'external'>('local')
+const collectionPreviews = reactive<Record<string, CollectionPreviewState>>({})
+const currentGalleryTab = ref<'all' | 'local' | 'external'>('all')
 const showImportLinks = ref(false)
+const selectedImageSet = ref<Set<string>>(new Set())
+const bulkMoveTarget = ref('')
+const gallerySearch = ref('')
+const gallerySort = ref<'name' | 'nameDesc'>('name')
+const galleryFilter = ref<'all' | 'selected'>('all')
+const galleryViewMode = ref<'grid' | 'list'>('grid')
+const apiPreviewUrl = ref('')
+const apiPreviewLoading = ref(false)
 
 const activeMoveDropdown = ref<string | null>(null)
 
@@ -619,15 +925,152 @@ function toggleMoveDropdown(img: string) {
   }
 }
 
+function isImageSelected(img: string): boolean {
+  return selectedImageSet.value.has(img)
+}
+
+function toggleImageSelection(img: string) {
+  const next = new Set(selectedImageSet.value)
+  if (next.has(img)) {
+    next.delete(img)
+  } else {
+    next.add(img)
+  }
+  selectedImageSet.value = next
+}
+
+function clearSelectedImages() {
+  selectedImageSet.value = new Set()
+  bulkMoveTarget.value = ''
+}
+
+function toggleSelectCurrentPage() {
+  const next = new Set(selectedImageSet.value)
+  const localItems = paginatedGalleryItems.value.filter((item) => item.type === 'local')
+  if (areAllCurrentPageImagesSelected.value) {
+    localItems.forEach((item) => next.delete(item.value))
+  } else {
+    localItems.forEach((item) => next.add(item.value))
+  }
+  selectedImageSet.value = next
+}
+
+function handleGalleryItemClick(item: AssetGalleryItem) {
+  if (item.type === 'local' && selectedImages.value.length) {
+    toggleImageSelection(item.value)
+    return
+  }
+  openImage(item.src)
+}
+
 // Pagination reactivity for Images gallery
 const currentPage = ref(1)
 const pageSize = ref(24)
-const totalPages = computed(() => {
-  return Math.ceil(detailResources.images.length / pageSize.value)
+const galleryItems = computed<AssetGalleryItem[]>(() => {
+  if (!currentCollection.value) return []
+
+  const localItems = detailResources.images.map((filename) => ({
+    id: `local:${filename}`,
+    type: 'local' as const,
+    label: filename,
+    src: getLocalImageApiUrl(currentCollection.value.name, filename),
+    value: filename
+  }))
+  const externalItems = detailResources.links.map((link) => ({
+    id: `external:${link}`,
+    type: 'external' as const,
+    label: getExternalLinkLabel(link),
+    src: link,
+    value: link
+  }))
+
+  if (currentGalleryTab.value === 'local') return localItems
+  if (currentGalleryTab.value === 'external') return externalItems
+  return [...localItems, ...externalItems]
 })
-const paginatedImages = computed(() => {
+const filteredGalleryItems = computed(() => {
+  const query = gallerySearch.value.trim().toLowerCase()
+  let items = galleryItems.value.filter((item) => {
+    if (!query) return true
+    return item.label.toLowerCase().includes(query) || item.value.toLowerCase().includes(query)
+  })
+  if (galleryFilter.value === 'selected') {
+    items = items.filter((item) => item.type === 'local' && selectedImageSet.value.has(item.value))
+  }
+  return [...items].sort((a, b) => gallerySort.value === 'nameDesc'
+    ? b.label.localeCompare(a.label)
+    : a.label.localeCompare(b.label))
+})
+const totalPages = computed(() => {
+  return Math.max(1, Math.ceil(filteredGalleryItems.value.length / pageSize.value))
+})
+const paginatedGalleryItems = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
-  return detailResources.images.slice(start, start + pageSize.value)
+  return filteredGalleryItems.value.slice(start, start + pageSize.value)
+})
+const selectedImages = computed(() => Array.from(selectedImageSet.value))
+const areAllCurrentPageImagesSelected = computed(() => {
+  const localItems = paginatedGalleryItems.value.filter((item) => item.type === 'local')
+  return localItems.length > 0 && localItems.every((item) => selectedImageSet.value.has(item.value))
+})
+const currentCollectionCoverUrl = computed(() => {
+  if (!currentCollection.value) return ''
+  const local = detailResources.images[0]
+  if (local) return getLocalImageApiUrl(currentCollection.value.name, local)
+  return detailResources.links[0] || ''
+})
+const currentCollectionApiUrl = computed(() => {
+  return currentCollection.value ? getBaseRedirectUrl(currentCollection.value.name) : ''
+})
+const currentCollectionTotalCount = computed(() => {
+  return currentCollection.value?.totalCount || detailResources.images.length + detailResources.links.length
+})
+const endpointPreviewUrl = computed(() => {
+  const name = endpointForm.name.trim()
+  return name ? getBaseRedirectUrl(name) : ''
+})
+const previewRouteRows = computed<PreviewRouteRow[]>(() => {
+  const collectionRows = collections.value
+    .filter((item) => item.hasContent)
+    .map((item) => ({
+      id: `collection:${item.name}`,
+      type: 'collection' as const,
+      typeLabel: '表情包',
+      name: item.name,
+      description: item.description || `${item.name} 表情包`,
+      path: `${backendPath.value}/${item.name}`,
+      fullUrl: getBaseRedirectUrl(item.name),
+      previewImages: getCollectionPreviewImages(item.name).slice(0, 3)
+    }))
+
+  const endpointRows = endpoints.value.map((item) => {
+    const fullUrl = getBaseRedirectUrl(item.name)
+    const previewImages = failedEndpointPreviewIds.value.has(`endpoint:${item.name}`) ? [] : [fullUrl]
+    return {
+      id: `endpoint:${item.name}`,
+      type: 'endpoint' as const,
+      typeLabel: '重定向',
+      name: item.name,
+      description: item.description || '302 重定向',
+      path: `${backendPath.value}/${item.name}`,
+      fullUrl,
+      previewImages,
+    }
+  })
+
+  return [...collectionRows, ...endpointRows]
+})
+const filteredCollections = computed(() => {
+  const query = collectionSearchQuery.value.trim().toLowerCase()
+  return collections.value.filter((item) => {
+    const matchesQuery = !query
+      || item.name.toLowerCase().includes(query)
+      || (item.description || '').toLowerCase().includes(query)
+    const matchesFilter = collectionFilter.value === 'all'
+      || (collectionFilter.value === 'local' && item.localCount > 0 && item.linkCount === 0)
+      || (collectionFilter.value === 'external' && item.linkCount > 0)
+    return matchesQuery && matchesFilter
+  })
 })
 
 // Settings preview values from backend
@@ -664,19 +1107,103 @@ function switchMainMenu(menu: 'resources' | 'distribution' | 'settings') {
   }
 }
 
-// Formatting server redirect and resource APIs URLs
-function getBaseRedirectUrl(suffix: string): string {
+function getBackendBaseUrl(): string {
   const cleanBase = baseUrl.value.endsWith('/') ? baseUrl.value.slice(0, -1) : baseUrl.value
   const cleanPath = backendPath.value.startsWith('/') ? backendPath.value : `/${backendPath.value}`
   const formattedPath = cleanPath.endsWith('/') ? cleanPath.slice(0, -1) : cleanPath
-  return `${cleanBase}${formattedPath}/${suffix}`
+  return `${cleanBase}${formattedPath}`
+}
+
+// Formatting server redirect and resource APIs URLs
+function getBaseRedirectUrl(suffix: string): string {
+  return `${getBackendBaseUrl()}/${suffix}`
 }
 
 function getLocalImageApiUrl(collection: string, filename: string): string {
-  const cleanBase = baseUrl.value.endsWith('/') ? baseUrl.value.slice(0, -1) : baseUrl.value
-  const cleanPath = backendPath.value.startsWith('/') ? backendPath.value : `/${backendPath.value}`
-  const formattedPath = cleanPath.endsWith('/') ? cleanPath.slice(0, -1) : cleanPath
-  return `${cleanBase}${formattedPath}/api/admin/collections/${encodeURIComponent(collection)}/images/${encodeURIComponent(filename)}`
+  return `${getBackendBaseUrl()}/api/admin/collections/${encodeURIComponent(collection)}/images/${encodeURIComponent(filename)}`
+}
+
+function handlePreviewImageError(row: PreviewRouteRow) {
+  if (row.type !== 'endpoint') return
+  const next = new Set(failedEndpointPreviewIds.value)
+  next.add(row.id)
+  failedEndpointPreviewIds.value = next
+}
+
+function formatDate(value?: string | Date): string {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return date.toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+}
+
+function getImageExtension(filename: string): string {
+  const ext = filename.split('.').pop()
+  return ext ? ext.toUpperCase() : 'IMG'
+}
+
+function getExternalLinkLabel(link: string): string {
+  try {
+    const url = new URL(link)
+    const filename = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || url.hostname)
+    return filename || url.hostname
+  } catch {
+    return link
+  }
+}
+
+function getCollectionPreviewState(name: string): CollectionPreviewState | undefined {
+  return collectionPreviews[name]
+}
+
+function getCollectionPreviewImages(name: string): string[] {
+  return collectionPreviews[name]?.images || []
+}
+
+function getCollectionCardPreviewImages(name: string): string[] {
+  return getCollectionPreviewImages(name).slice(0, 6)
+}
+
+function getCollectionPreviewCountClass(name: string): string {
+  const count = Math.min(getCollectionPreviewImages(name).length, 9)
+  return count ? `preview-count-${count}` : 'preview-count-0'
+}
+
+async function loadCollectionPreview(collection: CollectionInfo) {
+  if (!collection.hasContent || collectionPreviews[collection.name]?.images.length) return
+  collectionPreviews[collection.name] = collectionPreviews[collection.name] || { loading: true, images: [] }
+  collectionPreviews[collection.name].loading = true
+
+  try {
+    const response = await fetch(`${getBackendBaseUrl()}/api/collections/${encodeURIComponent(collection.name)}/resources`)
+    if (!response.ok) return
+
+    const data = await response.json()
+    const previewLimit = 9
+    const localImages = Array.isArray(data.images)
+      ? data.images.slice(0, previewLimit).map((filename: string) => getLocalImageApiUrl(collection.name, filename))
+      : []
+    const externalImages = Array.isArray(data.links) ? data.links.slice(0, previewLimit - localImages.length) : []
+
+    collectionPreviews[collection.name].images = [...localImages, ...externalImages]
+  } catch {
+    collectionPreviews[collection.name].images = []
+  } finally {
+    collectionPreviews[collection.name].loading = false
+  }
+}
+
+function warmCollectionPreviews() {
+  collections.value
+    .filter((item) => item.hasContent)
+    .slice(0, 24)
+    .forEach((item) => {
+      void loadCollectionPreview(item)
+    })
 }
 
 // Fetch variables from Koishi app
@@ -691,6 +1218,7 @@ async function fetchState() {
       if (state.backendPath) backendPath.value = state.backendPath
       endpoints.value = Array.isArray(state.endpoints) ? state.endpoints : []
       collections.value = Array.isArray(state.collections) ? state.collections : []
+      warmCollectionPreviews()
     }
   } catch (err) {
     showToast(err instanceof Error ? err.message : '获取插件状态同步失败', 'error')
@@ -699,10 +1227,7 @@ async function fetchState() {
 
 async function fetchSettingsPreview() {
   try {
-    const cleanBase = baseUrl.value.endsWith('/') ? baseUrl.value.slice(0, -1) : baseUrl.value
-    const cleanPath = backendPath.value.startsWith('/') ? backendPath.value : `/${backendPath.value}`
-    const formattedPath = cleanPath.endsWith('/') ? cleanPath.slice(0, -1) : cleanPath
-    const response = await fetch(`${cleanBase}${formattedPath}/api/homepage-data`)
+    const response = await fetch(`${getBackendBaseUrl()}/api/homepage-data`)
     if (response.ok) {
       const data = await response.json()
       routeInventoryText.value = data.routeInventory || ''
@@ -714,24 +1239,31 @@ async function fetchSettingsPreview() {
 }
 
 // Actions: Endpoints
+function openEndpointEditor() {
+  resetEndpointForm()
+  showEndpointEditor.value = true
+}
+
+function closeEndpointEditor() {
+  resetEndpointForm()
+  showEndpointEditor.value = false
+}
+
 function resetEndpointForm() {
   editingEndpoint.value = null
   endpointForm.name = ''
   endpointForm.group = ''
   endpointForm.description = ''
   endpointForm.url = ''
-  endpointForm.method = 'redirect'
-  endpointForm.urlConstruction = 'normal'
 }
 
-function editEndpoint(item: any) {
+function editEndpoint(item: EndpointInfo) {
   editingEndpoint.value = item
+  showEndpointEditor.value = true
   endpointForm.name = item.name || ''
   endpointForm.group = item.group || ''
   endpointForm.description = item.description || ''
   endpointForm.url = item.url || ''
-  endpointForm.method = item.method || 'redirect'
-  endpointForm.urlConstruction = item.urlConstruction || 'normal'
 }
 
 async function saveEndpoint() {
@@ -748,10 +1280,7 @@ async function saveEndpoint() {
     group: endpointForm.group.trim() || '默认分组',
     description: endpointForm.description.trim(),
     url,
-    method: endpointForm.method,
-    urlConstruction: endpointForm.urlConstruction,
-    queryParams: [],
-    proxySettings: { fallbackAction: 'returnJson' }
+    method: 'redirect' as const,
   }
 
   try {
@@ -765,6 +1294,7 @@ async function saveEndpoint() {
     }
     await fetchState()
     resetEndpointForm()
+    showEndpointEditor.value = false
   } catch (err) {
     showToast(err instanceof Error ? err.message : '保存端点失败', 'error')
   } finally {
@@ -802,7 +1332,10 @@ async function copyToClipboard(text: string) {
 
 // Actions: Collections
 async function createCollection() {
-  const name = newCollectionName.value.trim()
+  let name = newCollectionName.value.trim()
+  if (!name) {
+    name = window.prompt('请输入表情包名称')?.trim() || ''
+  }
   if (!name) {
     showToast('表情包名称不能为空', 'error')
     return
@@ -826,6 +1359,7 @@ async function createCollection() {
 }
 
 async function confirmDeleteCollection(name: string) {
+  activeCollectionMenu.value = null
   if (!confirm(`⚠️ 危险操作：确认永久且彻底删除表情包 "${name}"，及其包含的所有本地图片文件吗？此项操作不可逆！`)) return
 
   try {
@@ -842,27 +1376,36 @@ async function confirmDeleteCollection(name: string) {
 }
 
 async function enterCollectionDetail(item: any) {
+  activeCollectionMenu.value = null
   currentCollection.value = item
   newDescription.value = item.description || ''
   externalLinksText.value = ''
+  gallerySearch.value = ''
+  gallerySort.value = 'name'
+  galleryFilter.value = 'all'
+  galleryViewMode.value = 'grid'
+  apiPreviewUrl.value = ''
   currentPage.value = 1
+  clearSelectedImages()
   await loadCollectionResources(item.name)
 }
 
 function exitCollectionDetail() {
   currentCollection.value = null
+  if (apiPreviewUrl.value) URL.revokeObjectURL(apiPreviewUrl.value)
+  apiPreviewUrl.value = ''
+  clearSelectedImages()
 }
 
 async function loadCollectionResources(name: string) {
   try {
-    const cleanBase = baseUrl.value.endsWith('/') ? baseUrl.value.slice(0, -1) : baseUrl.value
-    const cleanPath = backendPath.value.startsWith('/') ? backendPath.value : `/${backendPath.value}`
-    const formattedPath = cleanPath.endsWith('/') ? cleanPath.slice(0, -1) : cleanPath
-    const response = await fetch(`${cleanBase}${formattedPath}/api/collections/${encodeURIComponent(name)}/resources`)
+    const response = await fetch(`${getBackendBaseUrl()}/api/collections/${encodeURIComponent(name)}/resources`)
     if (response.ok) {
       const data = await response.json()
       detailResources.images = Array.isArray(data.images) ? data.images : []
       detailResources.links = Array.isArray(data.links) ? data.links : []
+      const available = new Set(detailResources.images)
+      selectedImageSet.value = new Set(selectedImages.value.filter((img) => available.has(img)))
     }
   } catch (err) {
     showToast('加载该表情包下的图片缓存失败', 'error')
@@ -878,6 +1421,36 @@ async function refreshCollectionResources() {
   if (match) currentCollection.value = match
   loading.value = false
   showToast('本地及缓存资源数据已刷新成功', 'success')
+}
+
+async function testCurrentCollectionApi() {
+  if (!currentCollection.value) return
+
+  apiPreviewLoading.value = true
+  try {
+    const response = await fetch(currentCollectionApiUrl.value, { redirect: 'follow' })
+    if (!response.ok) {
+      showToast('测试接口未返回可用图片', 'error')
+      return
+    }
+
+    const blob = await response.blob()
+    if (!blob.type.startsWith('image/')) {
+      showToast('测试接口返回的不是图片资源', 'error')
+      return
+    }
+
+    if (apiPreviewUrl.value) URL.revokeObjectURL(apiPreviewUrl.value)
+    apiPreviewUrl.value = URL.createObjectURL(blob)
+    showToast('已获取随机图片预览', 'success')
+    await fetchState()
+    const match = collections.value.find(c => c.name === currentCollection.value?.name)
+    if (match) currentCollection.value = match
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '测试接口失败', 'error')
+  } finally {
+    apiPreviewLoading.value = false
+  }
 }
 
 async function saveCollectionDescription() {
@@ -955,11 +1528,7 @@ async function uploadFiles(files: FileList) {
       })
     }
 
-    const cleanBase = baseUrl.value.endsWith('/') ? baseUrl.value.slice(0, -1) : baseUrl.value
-    const cleanPath = backendPath.value.startsWith('/') ? backendPath.value : `/${backendPath.value}`
-    const formattedPath = cleanPath.endsWith('/') ? cleanPath.slice(0, -1) : cleanPath
-
-    const response = await fetch(`${cleanBase}${formattedPath}/api/admin/collections/${encodeURIComponent(currentCollection.value.name)}/images`, {
+    const response = await fetch(`${getBackendBaseUrl()}/api/admin/collections/${encodeURIComponent(currentCollection.value.name)}/images`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -1055,6 +1624,27 @@ async function confirmDeleteImage(collectionName: string, filename: string) {
   }
 }
 
+async function deleteSelectedImages() {
+  if (!currentCollection.value || !selectedImages.value.length) return
+  const names = selectedImages.value
+  if (!confirm(`确认永久删除已选择的 ${names.length} 张本地图片素材吗？此操作无法恢复！`)) return
+
+  try {
+    loading.value = true
+    for (const filename of names) {
+      await send('memesluna/deleteLocalImage', currentCollection.value.name, filename)
+    }
+    showToast(`已删除 ${names.length} 张本地图片`, 'success')
+    clearSelectedImages()
+    await loadCollectionResources(currentCollection.value.name)
+    await fetchState()
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '批量删除失败', 'error')
+  } finally {
+    loading.value = false
+  }
+}
+
 async function moveImage(source: string, target: string, filename: string) {
   try {
     loading.value = true
@@ -1073,12 +1663,43 @@ async function moveImage(source: string, target: string, filename: string) {
   }
 }
 
+async function moveSelectedImages() {
+  if (!currentCollection.value || !selectedImages.value.length || !bulkMoveTarget.value) return
+  const source = currentCollection.value.name
+  const target = bulkMoveTarget.value
+  if (target === source) {
+    showToast('不能移动到当前表情包', 'error')
+    return
+  }
+
+  const names = selectedImages.value
+  try {
+    loading.value = true
+    for (const filename of names) {
+      await send('memesluna/moveLocalImage', source, target, filename)
+    }
+    showToast(`已将 ${names.length} 张素材移动至表情包 "${target}"`, 'success')
+    clearSelectedImages()
+    await loadCollectionResources(source)
+    await fetchState()
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '批量移动失败', 'error')
+  } finally {
+    loading.value = false
+  }
+}
+
 function openImage(url: string) {
   window.open(url, '_blank')
 }
 
+function toggleCollectionMenu(name: string) {
+  activeCollectionMenu.value = activeCollectionMenu.value === name ? null : name
+}
+
 const closeDropdowns = () => {
   activeMoveDropdown.value = null
+  activeCollectionMenu.value = null
 }
 
 // Lifecycle Hooks
@@ -1091,6 +1712,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('click', closeDropdowns)
+  if (apiPreviewUrl.value) URL.revokeObjectURL(apiPreviewUrl.value)
 })
 
 // Listeners/Watchers
@@ -1099,6 +1721,14 @@ watch(detailResources, () => {
   if (currentPage.value > totalPages.value && totalPages.value > 0) {
     currentPage.value = totalPages.value
   }
+})
+
+watch([gallerySearch, gallerySort, galleryFilter], () => {
+  currentPage.value = 1
+})
+
+watch([collectionSearchQuery, collectionFilter], () => {
+  activeCollectionMenu.value = null
 })
 </script>
 
@@ -1111,12 +1741,64 @@ watch(detailResources, () => {
   background-color: var(--k-bg-card, #ffffff);
   color: var(--k-text-normal, #37352f);
   box-sizing: border-box;
+  color-scheme: light;
+  --k-bg-card: var(--k-card-bg, #ffffff);
+  --k-bg-panel: var(--k-hover-bg, #f7f7f5);
+  --k-bg-button-hover: var(--k-hover-bg, rgba(55, 53, 47, 0.04));
+  --k-text-muted: var(--k-text-light, rgba(55, 53, 47, 0.55));
+  --memesluna-drop-overlay-bg: rgba(255, 255, 255, 0.85);
+  --memesluna-floating-action-bg: rgba(255, 255, 255, 0.92);
+  --memesluna-floating-shadow: none;
+  --memesluna-focus-ring: rgba(35, 131, 226, 0.15);
+  --memesluna-primary-soft-bg: rgba(35, 131, 226, 0.1);
+  --memesluna-primary-faint-bg: rgba(35, 131, 226, 0.04);
+  --memesluna-success-soft-bg: rgba(43, 138, 92, 0.1);
+  --memesluna-danger-soft-bg: rgba(235, 87, 87, 0.08);
+  --memesluna-danger-border: rgba(235, 87, 87, 0.25);
+  --memesluna-toast-success-bg: #f2f9f5;
+  --memesluna-toast-error-bg: #fdf2f2;
+  --memesluna-final-prompt-bg: rgba(35, 131, 226, 0.02);
+  --memesluna-final-prompt-text: #1e3a8a;
+  --memesluna-code-bg: #ffffff;
+  --memesluna-code-text: #111827;
+  --memesluna-code-border: rgba(15, 23, 42, 0.09);
+  --memesluna-soft-shadow: none;
+  --memesluna-card-shadow: none;
+  --memesluna-popover-shadow: none;
+}
+
+:global(html.dark .memesluna-app-layout),
+:global(.theme-root.dark .memesluna-app-layout) {
+  color-scheme: dark;
+  --k-bg-card: var(--k-card-bg, #252529);
+  --k-bg-panel: var(--k-hover-bg, #303036);
+  --k-bg-button-hover: var(--k-hover-bg, rgba(255, 255, 255, 0.06));
+  --k-text-muted: var(--k-text-light, rgba(235, 235, 245, 0.62));
+  --memesluna-drop-overlay-bg: rgba(20, 20, 24, 0.82);
+  --memesluna-floating-action-bg: rgba(42, 42, 48, 0.94);
+  --memesluna-floating-shadow: none;
+  --memesluna-focus-ring: rgba(64, 158, 255, 0.24);
+  --memesluna-primary-soft-bg: rgba(64, 158, 255, 0.16);
+  --memesluna-primary-faint-bg: rgba(64, 158, 255, 0.1);
+  --memesluna-success-soft-bg: rgba(103, 194, 58, 0.16);
+  --memesluna-danger-soft-bg: rgba(235, 87, 87, 0.16);
+  --memesluna-danger-border: rgba(235, 87, 87, 0.34);
+  --memesluna-toast-success-bg: rgba(43, 138, 92, 0.16);
+  --memesluna-toast-error-bg: rgba(235, 87, 87, 0.16);
+  --memesluna-final-prompt-bg: rgba(64, 158, 255, 0.12);
+  --memesluna-final-prompt-text: var(--k-color-primary-tint, #8ab4f8);
+  --memesluna-code-bg: #000000;
+  --memesluna-code-text: #f8fafc;
+  --memesluna-code-border: rgba(255, 255, 255, 0.14);
+  --memesluna-soft-shadow: none;
+  --memesluna-card-shadow: none;
+  --memesluna-popover-shadow: none;
 }
 
 .notion-content {
-  padding: 24px 32px;
+  padding: 80px 112px 112px;
   box-sizing: border-box;
-  max-width: 1200px;
+  max-width: 1880px;
   margin: 0 auto;
 }
 
@@ -1224,17 +1906,81 @@ watch(detailResources, () => {
   margin-bottom: 12px;
 }
 
+.collection-list-header {
+  gap: 20px;
+  justify-content: flex-end;
+}
+
+.collection-title-group {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  min-width: 0;
+}
+
 .notion-db-title {
-  font-size: 1.2rem;
-  font-weight: 600;
+  font-size: 1.24rem;
+  font-weight: 700;
   margin: 0;
   color: var(--k-text-normal, #37352f);
+  white-space: nowrap;
+}
+
+.collection-total-count {
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.58));
+  font-size: 0.82rem;
+  white-space: nowrap;
 }
 
 .notion-db-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.collection-toolbar {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+
+.collection-search-shell,
+.collection-filter-shell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.52));
+}
+
+.collection-toolbar-icon {
+  position: absolute;
+  right: 11px;
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
+  color: currentColor;
+  z-index: 1;
+}
+
+.collection-search-shell .collection-search-input {
+  width: 280px;
+  height: 36px;
+  padding-left: 12px;
+  padding-right: 36px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  background-color: var(--k-bg-card, #ffffff);
+}
+
+.collection-filter-shell .collection-filter-select {
+  width: 128px;
+  height: 36px;
+  padding-left: 12px;
+  padding-right: 36px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  background-color: var(--k-bg-card, #ffffff);
+  cursor: pointer;
+  appearance: none;
 }
 
 .collection-name-input-notion {
@@ -1244,9 +1990,18 @@ watch(detailResources, () => {
 }
 
 .btn-notion {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 0.78rem;
+  height: 36px;
+  padding: 0 14px;
+  gap: 6px;
+  border-radius: 6px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.btn-plus {
+  font-size: 1rem;
+  line-height: 1;
 }
 
 .notion-hr {
@@ -1258,186 +2013,709 @@ watch(detailResources, () => {
 /* Folders Grid & Cards */
 .folders-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px 24px;
 }
 
 .folder-card {
   background: var(--k-bg-card, #ffffff);
-  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.09));
-  border-radius: 6px;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.09));
+  border-radius: 8px;
   overflow: hidden;
   cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
 }
 
 .folder-card:hover {
-  border-color: var(--k-color-primary, #2383e2);
-  background-color: var(--k-bg-button-hover, #fbfbfa);
+  border-color: rgba(35, 131, 226, 0.28);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
 }
 
-.folder-header {
-  height: 80px;
+.folder-cover {
+  position: relative;
+  aspect-ratio: 2.18 / 1;
+  min-height: 132px;
   background-color: var(--k-bg-panel, #f7f7f5);
-  border-bottom: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.06));
+  border-bottom: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+}
+
+.folder-cover.has-preview {
+  background-color: var(--k-color-border, rgba(15, 23, 42, 0.08));
+}
+
+.folder-cover.empty {
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--k-text-muted, rgba(55, 53, 47, 0.4));
 }
 
-.folder-card:hover .folder-header {
+.folder-card:hover .folder-cover.empty {
   color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
   background-color: var(--k-bg-button-hover, #f1f1ef);
 }
 
-.folder-header svg {
-  width: 28px;
-  height: 28px;
+.folder-cover-empty svg {
+  width: 32px;
+  height: 32px;
+}
+
+.folder-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background-color: var(--k-bg-panel, #f7f7f5);
+}
+
+.folder-cover-badge {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background-color: var(--memesluna-floating-action-bg);
+  box-shadow: var(--memesluna-floating-shadow);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.6));
+  font-size: 0.65rem;
+  font-weight: 500;
 }
 
 .folder-body {
-  padding: 12px 14px;
+  padding: 15px 16px 16px;
   flex: 1;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
   box-sizing: border-box;
+  min-height: 108px;
+}
+
+.folder-title-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .folder-name {
-  font-size: 0.85rem;
-  font-weight: 600;
+  min-width: 0;
+  font-size: 0.96rem;
+  font-weight: 700;
   color: var(--k-text-normal, #37352f);
-  margin-bottom: 4px;
-}
-
-.folder-desc {
-  font-size: 0.75rem;
-  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
-  line-height: 1.4;
-  height: 34px;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.folder-footer {
-  display: flex;
-  justify-content: space-between;
+.folder-more-btn {
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.56));
+  display: inline-flex;
   align-items: center;
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.06));
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
-.folder-meta {
-  font-size: 0.68rem;
-  color: var(--k-text-muted, rgba(55, 53, 47, 0.45));
-  font-weight: 500;
+.folder-more-btn:hover {
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.06));
+  color: var(--k-text-normal, #37352f);
 }
 
-.folder-manage-link {
-  font-size: 0.72rem;
-  color: var(--k-color-primary, #2383e2);
-  font-weight: 500;
+.folder-more-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.folder-action-menu {
+  position: absolute;
+  right: 0;
+  top: 30px;
+  min-width: 112px;
+  padding: 5px;
+  border-radius: 6px;
+  background-color: var(--k-bg-card, #ffffff);
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.12));
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+  z-index: 20;
+}
+
+.folder-action-menu button {
+  width: 100%;
+  height: 28px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--k-text-normal, #37352f);
+  text-align: left;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.folder-action-menu button:hover {
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.06));
+}
+
+.folder-action-menu button.danger {
+  color: var(--k-color-danger, #eb5757);
+}
+
+.folder-count {
+  margin-top: 9px;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.62));
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.folder-meta-row {
+  margin-top: 8px;
   display: flex;
   align-items: center;
-  gap: 2px;
+  min-width: 0;
 }
 
-.folder-card:hover .folder-manage-link {
-  text-decoration: underline;
-}
-
-.chevron-right {
-  width: 8px;
-  height: 8px;
-}
-
-/* Notion Page Title & Header Block */
-.notion-page-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 12px;
-  margin-bottom: 16px;
-}
-
-.notion-page-header-left {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-}
-
-.notion-page-header-right {
-  display: flex;
+.folder-meta-item {
+  min-width: 0;
+  display: inline-flex;
   align-items: center;
-  align-self: flex-end;
-  margin-bottom: 2px;
+  gap: 5px;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.6));
+  font-size: 0.8rem;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.notion-page-icon {
-  font-size: 2.2rem;
-  user-select: none;
+.folder-meta-item svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
 }
 
-.notion-page-title-wrapper {
+/* Asset detail workspace */
+.collection-detail-layout {
+  margin-top: 4px;
+}
+
+.asset-detail-shell {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 14px;
 }
 
-.notion-page-title {
-  font-size: 1.6rem;
-  font-weight: 700;
-  margin: 0;
-  color: var(--k-text-normal, #37352f);
-}
-
-.notion-page-meta {
-  font-size: 0.78rem;
-  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
+.detail-topbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 8px;
+}
+
+.detail-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.58));
+  font-size: 0.82rem;
+}
+
+.detail-back-btn {
+  border: none;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.detail-back-btn:hover {
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.05));
+  color: var(--k-text-normal, #111827);
+}
+
+.detail-back-btn svg,
+.asset-btn svg,
+.asset-icon-btn svg,
+.asset-test-btn svg,
+.asset-view-toggle svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.detail-separator {
+  color: var(--k-color-border, rgba(55, 53, 47, 0.3));
+}
+
+.detail-crumb-current,
+.detail-crumb-strong {
+  color: var(--k-text-normal, #111827);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-top-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.code-url {
-  background-color: var(--k-bg-panel, rgba(135, 131, 120, 0.15));
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-family: SFMono-Regular, Consolas, monospace;
-  font-size: 0.75rem;
-  color: #eb5757;
-  cursor: pointer;
-  transition: background 0.1s ease;
-}
-
-.code-url:hover {
-  background-color: var(--k-bg-button-hover, rgba(135, 131, 120, 0.25));
-}
-
-.btn-test-link {
-  font-size: 0.72rem;
-  font-weight: 600;
+.asset-btn,
+.asset-icon-btn,
+.asset-test-btn {
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.1));
   background-color: var(--k-bg-card, #ffffff);
-  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.15));
-  border-radius: 4px;
-  padding: 1px 6px;
-  color: var(--k-text-normal, #37352f);
-  text-decoration: none;
+  color: var(--k-text-normal, #111827);
+  border-radius: 12px;
+  min-height: 36px;
+  padding: 0 13px;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 0.8rem;
+  font-weight: 650;
+  cursor: pointer;
+  box-shadow: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.asset-btn:hover,
+.asset-icon-btn:hover,
+.asset-test-btn:hover {
+  background-color: var(--k-bg-panel, #f8fafc);
+}
+
+.asset-btn.primary,
+.asset-test-btn {
+  border-color: transparent;
+  background: #1f6feb;
+  color: #ffffff;
+  box-shadow: none;
+}
+
+.asset-btn.primary:hover,
+.asset-test-btn:hover {
+  background: #1a5fd0;
+}
+
+.asset-btn.secondary {
+  background-color: var(--k-bg-card, #ffffff);
+}
+
+.asset-btn.ghost {
+  width: 36px;
+  padding: 0;
+}
+
+.asset-btn.danger {
+  color: var(--k-color-danger, #eb5757);
+}
+
+.asset-btn.danger:hover {
+  background-color: var(--memesluna-danger-soft-bg);
+  border-color: var(--memesluna-danger-border);
+}
+
+.asset-hero-panel {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.95fr) minmax(520px, 1.55fr);
+  gap: 14px;
+  align-items: stretch;
+  padding: 18px;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
+  border-radius: 16px;
+  background: var(--k-bg-card, #ffffff);
+  box-shadow: var(--memesluna-soft-shadow);
+}
+
+.asset-identity-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.asset-avatar-frame {
+  width: 96px;
+  height: 96px;
+  border-radius: 18px;
+  overflow: hidden;
+  flex: 0 0 96px;
+  background: var(--k-bg-panel, #f6f8fb);
+  box-shadow: inset 0 0 0 1px var(--k-color-border, rgba(15, 23, 42, 0.08));
+}
+
+.asset-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.asset-avatar-empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.42));
+}
+
+.asset-avatar-empty svg {
+  width: 34px;
+  height: 34px;
+}
+
+.asset-title-stack {
+  min-width: 0;
+  flex: 1;
+}
+
+.asset-title-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.asset-title-row h1 {
+  margin: 0;
+  color: var(--k-text-normal, #0f172a);
+  font-size: 1.7rem;
+  line-height: 1.1;
+  font-weight: 760;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-pill {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background-color: var(--memesluna-danger-soft-bg);
+  color: var(--k-color-danger, #eb5757);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.asset-description-input {
+  margin-top: 9px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.68));
+  font-size: 0.88rem;
+  line-height: 1.4;
+  padding: 4px 0;
+  outline: none;
+  font-family: inherit;
+}
+
+.asset-description-input:focus {
+  color: var(--k-text-normal, #111827);
+}
+
+.asset-meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 12px;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.58));
+  font-size: 0.75rem;
+}
+
+.asset-api-card {
+  min-width: 0;
+  align-self: center;
+  width: 100%;
+  box-shadow: none;
+}
+
+.asset-card-label {
+  color: var(--k-text-normal, #111827);
+  font-size: 0.8rem;
+  font-weight: 720;
+  margin-bottom: 9px;
+}
+
+.asset-api-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  gap: 10px;
   align-items: center;
 }
 
-.btn-test-link:hover {
-  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.04));
+.asset-api-row code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background-color: var(--memesluna-primary-faint-bg);
+  color: var(--k-color-primary, #2563eb);
+  font: 0.82rem SFMono-Regular, Consolas, monospace;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.08);
+}
+
+.asset-icon-btn {
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: 10px;
+  font-size: 0.76rem;
+}
+
+.asset-icon-btn.compact {
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+
+.asset-test-btn:disabled {
+  opacity: 0.68;
+  cursor: wait;
+}
+
+.asset-api-hint {
+  margin-top: 10px;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.56));
+  font-size: 0.74rem;
+}
+
+.api-preview-strip {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.6));
+  font-size: 0.75rem;
+}
+
+.api-preview-strip img {
+  width: 42px;
+  height: 42px;
+  object-fit: cover;
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.asset-import-panel {
+  padding: 14px;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
+  border-radius: 14px;
+  background-color: var(--k-bg-card, #ffffff);
+  box-shadow: none;
+}
+
+.asset-import-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.asset-import-title {
+  color: var(--k-text-normal, #111827);
+  font-size: 0.9rem;
+  font-weight: 720;
+}
+
+.asset-import-desc {
+  margin-top: 3px;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.56));
+  font-size: 0.75rem;
+}
+
+.asset-link-textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 92px;
+  box-sizing: border-box;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.1));
+  border-radius: 12px;
+  background-color: var(--k-bg-panel, #f8fafc);
+  color: var(--k-text-normal, #111827);
+  padding: 10px 12px;
+  font: 0.8rem SFMono-Regular, Consolas, monospace;
+  outline: none;
+}
+
+.asset-link-textarea:focus {
+  border-color: var(--k-color-primary, #2563eb);
+  box-shadow: 0 0 0 3px var(--memesluna-focus-ring);
+  background-color: var(--k-bg-card, #ffffff);
+}
+
+.asset-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.asset-gallery-section {
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
+  border-radius: 16px;
+  background-color: var(--k-bg-card, #ffffff);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.asset-gallery-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
+}
+
+.asset-tabs,
+.asset-filter-bar,
+.asset-view-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.asset-tabs {
+  flex-wrap: wrap;
+}
+
+.asset-tab {
+  border: none;
+  background: transparent;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.62));
+  border-radius: 999px;
+  padding: 7px 11px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.8rem;
+  font-weight: 680;
+}
+
+.asset-tab:hover,
+.asset-tab.active {
+  color: var(--k-color-primary, #2563eb);
+  background-color: var(--memesluna-primary-soft-bg);
+}
+
+.asset-tab span {
+  min-width: 20px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background-color: var(--k-bg-panel, rgba(15, 23, 42, 0.06));
+  color: inherit;
+  font-size: 0.7rem;
+}
+
+.asset-filter-bar {
+  flex: 1;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.asset-search-box {
+  flex: 1;
+  max-width: 320px;
+  min-width: 180px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.1));
+  border-radius: 12px;
+  background-color: var(--k-bg-card, #ffffff);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.5));
+}
+
+.asset-search-box svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.asset-search-box input {
+  min-width: 0;
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--k-text-normal, #111827);
+  outline: none;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.asset-select {
+  height: 36px;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.1));
+  border-radius: 12px;
+  background-color: var(--k-bg-card, #ffffff);
+  color: var(--k-text-normal, #111827);
+  padding: 0 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  outline: none;
+}
+
+.asset-view-toggle {
+  padding: 3px;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.1));
+  border-radius: 12px;
+  background-color: var(--k-bg-panel, #f8fafc);
+}
+
+.asset-view-toggle button {
+  width: 30px;
+  height: 28px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.asset-view-toggle button.active {
+  background-color: var(--k-bg-card, #ffffff);
+  color: var(--k-color-primary, #2563eb);
 }
 
 /* Notion Page Action Toolbar */
@@ -1470,11 +2748,11 @@ watch(detailResources, () => {
 }
 
 .toolbar-btn.danger {
-  color: #eb5757;
+  color: var(--k-color-danger, #eb5757);
 }
 
 .toolbar-btn.danger:hover {
-  background-color: rgba(235, 87, 87, 0.08);
+  background-color: var(--memesluna-danger-soft-bg);
 }
 
 .toolbar-divider {
@@ -1594,7 +2872,7 @@ watch(detailResources, () => {
   width: 100%;
   height: 100%;
   z-index: 9999;
-  background-color: rgba(255, 255, 255, 0.85);
+  background-color: var(--memesluna-drop-overlay-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1604,7 +2882,7 @@ watch(detailResources, () => {
 
 .drop-overlay-box {
   border: 2px dashed var(--k-color-primary, #2383e2);
-  background-color: rgba(35, 131, 226, 0.04);
+  background-color: var(--memesluna-primary-faint-bg);
   border-radius: 8px;
   width: 100%;
   height: 100%;
@@ -1653,28 +2931,137 @@ watch(detailResources, () => {
 }
 
 .gallery-tab-content {
-  margin-top: 16px;
+  padding: 14px;
+  margin-top: 0;
+}
+
+.gallery-bulk-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 auto 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.1));
+  border-radius: 14px;
+  background-color: var(--memesluna-floating-action-bg);
+  backdrop-filter: blur(12px);
+}
+
+.gallery-bulk-toolbar.floating {
+  position: sticky;
+  top: 8px;
+  z-index: 40;
+  max-width: 920px;
+}
+
+.bulk-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bulk-title {
+  font-size: 0.82rem;
+  font-weight: 720;
+  color: var(--k-text-normal, #37352f);
+}
+
+.bulk-meta {
+  font-size: 0.72rem;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
+}
+
+.bulk-actions,
+.bulk-move-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.toolbar-btn.compact {
+  font-size: 0.74rem;
+  padding: 5px 9px;
+  border-radius: 10px;
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.compact-select {
+  height: 30px;
+  padding: 2px 9px;
+  font-size: 0.74rem;
+  border-radius: 10px;
 }
 
 /* Notion Gallery view grid & cards */
 .notion-gallery-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(174px, 1fr));
+  gap: 7px;
 }
 
 .notion-gallery-card {
-  background: var(--k-bg-card, #ffffff);
-  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.08));
-  border-radius: 4px;
+  background: transparent;
+  border: none;
+  border-radius: 12px;
   position: relative;
-  aspect-ratio: 1;
-  transition: border-color 0.12s ease;
+  aspect-ratio: 4 / 3;
+  transition: opacity 0.15s ease;
   box-shadow: none;
+  overflow: hidden;
 }
 
 .notion-gallery-card:hover {
-  border-color: var(--k-color-primary, #2383e2);
+  box-shadow: none;
+}
+
+.notion-gallery-card.selected {
+  box-shadow: none;
+}
+
+.notion-gallery-card.selected .gallery-img-container {
+  box-shadow: inset 0 0 0 2px var(--k-color-primary, #2563eb);
+}
+
+.notion-gallery-card.external .gallery-img-container {
+  background-color: var(--k-bg-card, #ffffff);
+}
+
+.gallery-select-toggle {
+  position: absolute;
+  top: 9px;
+  left: 9px;
+  z-index: 12;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 999px;
+  background-color: var(--memesluna-floating-action-bg);
+  box-shadow: none;
+  color: var(--k-color-primary, #2383e2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, border-color 0.12s ease;
+}
+
+.gallery-select-toggle svg {
+  width: 14px;
+  height: 14px;
+}
+
+.notion-gallery-card:hover .gallery-select-toggle,
+.notion-gallery-card.selected .gallery-select-toggle {
+  opacity: 1;
 }
 
 .gallery-img-container {
@@ -1685,13 +3072,79 @@ watch(detailResources, () => {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border-radius: 4px;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
 }
 
 .gallery-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.image-format-badge {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 12;
+  padding: 2px 6px;
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.62);
+  color: #ffffff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.image-format-badge.external {
+  background: rgba(13, 148, 136, 0.82);
+}
+
+.gallery-list-meta {
+  display: none;
+}
+
+.notion-gallery-grid.list-mode {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.notion-gallery-grid.list-mode .notion-gallery-card {
+  aspect-ratio: auto;
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
+  background-color: var(--k-bg-card, #ffffff);
+}
+
+.notion-gallery-grid.list-mode .gallery-img-container {
+  height: 68px;
+}
+
+.notion-gallery-grid.list-mode .gallery-list-meta {
+  display: block;
+  min-width: 0;
+  padding-right: 88px;
+}
+
+.gallery-list-meta div {
+  color: var(--k-text-normal, #111827);
+  font-size: 0.82rem;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gallery-list-meta span {
+  display: block;
+  margin-top: 4px;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
+  font-size: 0.72rem;
 }
 
 /* Hover overlay on top of square image card */
@@ -1703,11 +3156,11 @@ watch(detailResources, () => {
   bottom: 0;
   background: linear-gradient(
     to bottom,
-    rgba(0, 0, 0, 0.22) 0%,
+    rgba(0, 0, 0, 0.28) 0%,
     rgba(0, 0, 0, 0) 35%,
     rgba(0, 0, 0, 0) 100%
   );
-  border-radius: 4px;
+  border-radius: 12px;
   opacity: 0;
   transition: opacity 0.15s ease;
   pointer-events: none;
@@ -1730,15 +3183,15 @@ watch(detailResources, () => {
 
 .overlay-actions .card-action-btn {
   border: none;
-  background-color: rgba(255, 255, 255, 0.92);
+  background-color: var(--memesluna-floating-action-bg);
   backdrop-filter: blur(2px);
   color: var(--k-text-normal, #37352f);
   font-size: 0.65rem;
   padding: 3px 8px;
-  border-radius: 4px;
+  border-radius: 9px;
   cursor: pointer;
   font-weight: 500;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--memesluna-floating-shadow);
   transition: all 0.1s ease;
   display: flex;
   align-items: center;
@@ -1746,16 +3199,21 @@ watch(detailResources, () => {
 }
 
 .overlay-actions .card-action-btn.move:hover {
-  background: #2b8a5c;
+  background: var(--k-color-success, #2b8a5c);
   color: #ffffff;
 }
 
+.overlay-actions .card-action-btn:hover {
+  background: var(--k-bg-card, #ffffff);
+  color: var(--k-color-primary, #2563eb);
+}
+
 .overlay-actions .card-action-btn.danger {
-  color: #eb5757;
+  color: var(--k-color-danger, #eb5757);
 }
 
 .overlay-actions .card-action-btn.danger:hover {
-  background: #eb5757;
+  background: var(--k-color-danger, #eb5757);
   color: #ffffff;
 }
 
@@ -1780,7 +3238,14 @@ watch(detailResources, () => {
 .flat-textarea:focus {
   border-color: var(--k-color-primary, #2383e2);
   background: var(--k-bg-card, #ffffff);
-  box-shadow: 0 0 0 2px rgba(35, 131, 226, 0.15);
+  box-shadow: 0 0 0 2px var(--memesluna-focus-ring);
+}
+
+.flat-input::placeholder,
+.flat-textarea::placeholder,
+.property-input-text::placeholder {
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.45));
+  opacity: 0.78;
 }
 
 .flat-input:disabled {
@@ -1818,7 +3283,7 @@ watch(detailResources, () => {
 }
 
 .btn-primary:hover {
-  background-color: #1a6cb8;
+  background-color: var(--k-color-primary-shade, #1a6cb8);
 }
 
 .btn-secondary {
@@ -1832,12 +3297,12 @@ watch(detailResources, () => {
 }
 
 .btn-danger {
-  background-color: #eb5757;
+  background-color: var(--k-color-danger, #eb5757);
   color: #ffffff;
 }
 
 .btn-danger:hover {
-  background-color: #d44c4c;
+  background-color: var(--k-color-danger-shade, #d44c4c);
 }
 
 .w-full {
@@ -1896,7 +3361,6 @@ watch(detailResources, () => {
   background-color: var(--k-bg-card, #ffffff);
   border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.15));
   border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(15, 15, 15, 0.15);
   z-index: 100;
   min-width: 120px;
   width: max-content;
@@ -1996,20 +3460,59 @@ watch(detailResources, () => {
 }
 
 /* VIEW 2: DISTRIBUTION / ENDPOINT GRID */
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 24px;
+.page-section-header {
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 0;
+  margin-bottom: 14px;
 }
 
-@media (min-width: 960px) {
-  .dashboard-grid {
-    grid-template-columns: 300px 1fr;
-  }
+.page-section-header > div {
+  min-width: 0;
+}
+
+.page-section-header .notion-main-title {
+  margin: 0;
+  font-size: 1.78rem;
+  line-height: 1.18;
+  font-weight: 700;
+  color: var(--k-text-normal, #37352f);
+}
+
+.page-section-header .btn-notion {
+  align-self: center;
+}
+
+.section-desc.compact {
+  margin: 8px 0 0 0;
+  max-width: 620px;
+  line-height: 1.45;
+}
+
+.endpoint-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .notion-form-panel {
   padding: 12px 0;
+}
+
+.endpoint-editor-panel {
+  padding: 14px;
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.08));
+  border-radius: 6px;
+  background-color: var(--k-bg-card, #ffffff);
+}
+
+.panel-title-row,
+.table-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .notion-panel-title {
@@ -2018,6 +3521,16 @@ watch(detailResources, () => {
   margin-top: 0;
   margin-bottom: 16px;
   color: var(--k-text-normal, #37352f);
+}
+
+.panel-title-row .notion-panel-title,
+.table-title-row .notion-panel-title {
+  margin-bottom: 0;
+}
+
+.table-count {
+  font-size: 0.72rem;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.5));
 }
 
 .form-fields {
@@ -2029,6 +3542,17 @@ watch(detailResources, () => {
 .form-group {
   display: flex;
   flex-direction: column;
+}
+
+.endpoint-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.span-2 {
+  grid-column: 1 / -1;
 }
 
 .form-group label {
@@ -2049,9 +3573,43 @@ watch(detailResources, () => {
   margin-top: 8px;
 }
 
+.flex-grow {
+  flex: 1;
+}
+
+.endpoint-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 4px;
+  background-color: var(--k-bg-panel, rgba(55, 53, 47, 0.04));
+}
+
+.endpoint-preview span {
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.5));
+  font-size: 0.72rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.endpoint-preview code {
+  color: var(--k-color-primary, #2383e2);
+  font-family: SFMono-Regular, Consolas, monospace;
+  font-size: 0.74rem;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Notion Database table view for endpoints */
 .notion-table-panel {
   padding: 12px 0;
+}
+
+.table-title-row {
+  margin-bottom: 8px;
 }
 
 .table-container {
@@ -2127,13 +3685,8 @@ watch(detailResources, () => {
 }
 
 .method-tag.redirect {
-  background-color: rgba(35, 131, 226, 0.1);
-  color: #2383e2;
-}
-
-.method-tag.proxy {
-  background-color: rgba(43, 138, 92, 0.1);
-  color: #2b8a5c;
+  background-color: var(--memesluna-primary-soft-bg);
+  color: var(--k-color-primary, #2383e2);
 }
 
 .link-text {
@@ -2151,6 +3704,22 @@ watch(detailResources, () => {
   color: var(--k-text-muted, rgba(55, 53, 47, 0.4));
   max-width: 300px;
   margin-top: 2px;
+}
+
+.url-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.font-mono {
+  font-family: SFMono-Regular, Consolas, monospace;
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .action-buttons {
@@ -2180,9 +3749,9 @@ watch(detailResources, () => {
 }
 
 .icon-btn.hover-danger:hover {
-  background-color: rgba(235, 87, 87, 0.05);
-  border-color: rgba(235, 87, 87, 0.25);
-  color: #eb5757;
+  background-color: var(--memesluna-danger-soft-bg);
+  border-color: var(--memesluna-danger-border);
+  color: var(--k-color-danger, #eb5757);
 }
 
 .icon-btn-inline {
@@ -2204,16 +3773,232 @@ watch(detailResources, () => {
   height: 10px;
 }
 
-/* VIEW 3: PREVIEW LAYOUT — single centered column */
-.settings-centered-layout {
-  display: flex;
-  justify-content: center;
-  padding: 0 16px;
+.settings-preview-panel {
+  width: 100%;
+  max-width: none;
+  margin: 0 auto;
 }
 
-.settings-centered-layout .settings-preview-panel {
+.preview-page-header {
+  margin-bottom: 12px;
+}
+
+.preview-dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(560px, 1fr) minmax(420px, 0.9fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.preview-card {
+  min-width: 0;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.09));
+  border-radius: 14px;
+  background-color: var(--k-bg-card, #ffffff);
+  box-shadow: 0 10px 32px rgba(15, 23, 42, 0.06);
+  overflow: hidden;
+}
+
+.preview-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 20px 16px;
+  border-bottom: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
+}
+
+.preview-card-title {
+  color: var(--k-text-normal, #111827);
+  font-size: 1rem;
+  line-height: 1.25;
+  font-weight: 760;
+}
+
+.preview-card-desc {
+  margin-top: 5px;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.56));
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.preview-action-btn {
+  height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.1));
+  border-radius: 8px;
+  background-color: var(--k-bg-card, #ffffff);
+  color: var(--k-text-normal, #111827);
+  font-size: 0.76rem;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.preview-action-btn:hover:not(:disabled) {
+  background-color: var(--k-bg-panel, #f8fafc);
+}
+
+.preview-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.preview-table-wrap {
+  overflow-x: auto;
+}
+
+.preview-route-table {
   width: 100%;
-  max-width: 720px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.preview-route-table th,
+.preview-route-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.06));
+  text-align: left;
+  vertical-align: middle;
+}
+
+.preview-route-table th {
+  background-color: var(--k-bg-panel, #f8fafc);
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.54));
+  font-size: 0.7rem;
+  font-weight: 740;
+}
+
+.preview-route-table tr:last-child td {
+  border-bottom: none;
+}
+
+.preview-route-table th:nth-child(1),
+.preview-route-table td:nth-child(1) {
+  width: 86px;
+}
+
+.preview-route-table th:nth-child(2),
+.preview-route-table td:nth-child(2) {
+  width: 130px;
+}
+
+.preview-route-table th:nth-child(4),
+.preview-route-table td:nth-child(4) {
+  width: 186px;
+}
+
+.preview-route-table th:nth-child(5),
+.preview-route-table td:nth-child(5) {
+  width: 64px;
+  text-align: center;
+}
+
+.preview-mini-cover {
+  width: 58px;
+  height: 42px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border-radius: 8px;
+  background-color: var(--k-color-border, rgba(15, 23, 42, 0.08));
+}
+
+.preview-mini-cover.single {
+  display: block;
+}
+
+.preview-mini-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background-color: var(--k-bg-panel, #f7f7f5);
+}
+
+.preview-route-icon {
+  width: 58px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background-color: var(--memesluna-primary-faint-bg);
+  color: var(--k-color-primary, #2383e2);
+  font-size: 0.7rem;
+  font-weight: 760;
+}
+
+.preview-route-icon.endpoint {
+  background-color: var(--memesluna-success-soft-bg);
+  color: var(--k-color-success, #2b8a5c);
+}
+
+.preview-route-name {
+  min-width: 0;
+  color: var(--k-text-normal, #111827);
+  font-size: 0.84rem;
+  font-weight: 730;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-route-type {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 5px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background-color: var(--memesluna-primary-soft-bg);
+  color: var(--k-color-primary, #2383e2);
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.preview-route-type.endpoint {
+  background-color: var(--memesluna-success-soft-bg);
+  color: var(--k-color-success, #2b8a5c);
+}
+
+.preview-route-desc {
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.64));
+  font-size: 0.78rem;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  line-height: 1.45;
+  max-height: calc(1.45em * 3);
+}
+
+.preview-route-path {
+  display: block;
+  max-width: 100%;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background-color: var(--memesluna-primary-faint-bg);
+  color: var(--k-color-primary, #2383e2);
+  font-family: SFMono-Regular, Consolas, monospace;
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.preview-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview-empty-state {
+  padding: 64px 20px;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.48));
+  text-align: center;
+  font-size: 0.82rem;
 }
 
 .preview-prompt-container {
@@ -2227,6 +4012,19 @@ watch(detailResources, () => {
   font-weight: 600;
   color: var(--k-text-muted, rgba(55, 53, 47, 0.45));
   text-transform: uppercase;
+}
+
+.preview-sub-desc {
+  margin-top: 2px;
+  font-size: 0.72rem;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.45));
+}
+
+.preview-block-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .preview-code-block {
@@ -2248,13 +4046,23 @@ watch(detailResources, () => {
 }
 
 .preview-code-block.final-prompt {
-  max-height: 250px;
-  background-color: rgba(35, 131, 226, 0.02);
-  border-color: rgba(35, 131, 226, 0.12);
+  max-height: 620px;
+  background-color: var(--memesluna-final-prompt-bg);
+  border-color: var(--memesluna-primary-soft-bg);
+}
+
+.preview-code-block.polished {
+  margin: 16px;
+  border-radius: 12px;
+  background: var(--memesluna-code-bg);
+  border-color: var(--memesluna-code-border);
+  box-shadow: none;
 }
 
 .preview-code-block.final-prompt pre {
-  color: #1e3a8a;
+  color: var(--memesluna-code-text);
+  font-size: 0.76rem;
+  line-height: 1.7;
 }
 
 .text-gray-muted {
@@ -2277,20 +4085,20 @@ watch(detailResources, () => {
   font-weight: 500;
   background-color: var(--k-bg-card, #ffffff);
   border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.15));
-  box-shadow: 0 4px 16px rgba(15, 15, 15, 0.1);
+  box-shadow: var(--memesluna-card-shadow);
   color: var(--k-text-normal, #37352f);
 }
 
 .toast-banner.success {
-  background-color: #f2f9f5;
-  border-color: rgba(43, 138, 92, 0.25);
-  color: #2b8a5c;
+  background-color: var(--memesluna-toast-success-bg);
+  border-color: var(--memesluna-success-soft-bg);
+  color: var(--k-color-success, #2b8a5c);
 }
 
 .toast-banner.error {
-  background-color: #fdf2f2;
-  border-color: rgba(235, 87, 87, 0.25);
-  color: #eb5757;
+  background-color: var(--memesluna-toast-error-bg);
+  border-color: var(--memesluna-danger-border);
+  color: var(--k-color-danger, #eb5757);
 }
 
 .toast-icon {
@@ -2336,5 +4144,147 @@ watch(detailResources, () => {
 .fade-leave-to {
   opacity: 0;
   transform: translateY(-8px);
+}
+
+@media (max-width: 1280px) {
+  .notion-content {
+    padding: 64px 80px 96px;
+  }
+
+  .preview-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 780px) {
+  .memesluna-app-layout {
+    padding-left: 0;
+  }
+
+  .notion-content {
+    padding: 18px 16px;
+  }
+
+  .content-breadcrumb-header,
+  .notion-db-header,
+  .page-section-header,
+  .notion-page-header,
+  .gallery-bulk-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .notion-db-actions,
+  .bulk-actions,
+  .form-actions {
+    width: 100%;
+  }
+
+  .collection-name-input-notion,
+  .notion-db-actions .btn,
+  .form-actions .btn {
+    width: 100%;
+  }
+
+  .endpoint-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .span-2 {
+    grid-column: auto;
+  }
+
+  .folders-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .notion-gallery-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  }
+
+  .preview-block-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .preview-card-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .preview-action-btn {
+    width: 100%;
+  }
+
+  .preview-route-table {
+    min-width: 720px;
+  }
+}
+
+@media (max-width: 1180px) {
+  .asset-hero-panel {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 980px) {
+  .detail-topbar,
+  .asset-gallery-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .detail-top-actions,
+  .asset-filter-bar {
+    justify-content: flex-start;
+  }
+
+  .asset-filter-bar {
+    flex-wrap: wrap;
+  }
+
+  .asset-search-box {
+    max-width: none;
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .asset-hero-panel {
+    padding: 14px;
+    border-radius: 14px;
+  }
+
+  .asset-identity-card {
+    align-items: flex-start;
+  }
+
+  .asset-avatar-frame {
+    width: 72px;
+    height: 72px;
+    flex-basis: 72px;
+    border-radius: 14px;
+  }
+
+  .asset-title-row h1 {
+    font-size: 1.35rem;
+  }
+
+  .asset-api-row {
+    grid-template-columns: 1fr;
+  }
+
+  .asset-tabs,
+  .detail-top-actions {
+    width: 100%;
+  }
+
+  .asset-btn {
+    flex: 1;
+  }
+
+  .notion-gallery-grid {
+    grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
+  }
 }
 </style>
