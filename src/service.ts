@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import fs from 'fs/promises'
 import path from 'path'
 import { Context, Service } from 'koishi'
@@ -16,6 +16,31 @@ const IMAGE_EXTENSIONS = new Set([
   '.tiff',
   '.psd',
 ])
+
+export function hashImageBuffer(buffer: Buffer): string {
+  return createHash('sha256').update(buffer).digest('hex')
+}
+
+function loadSharp(): any | null {
+  try {
+    const sharpModule = require('sharp')
+    return sharpModule.default || sharpModule
+  } catch {
+    return null
+  }
+}
+
+function countHexBitDistance(a: string, b: string): number {
+  if (!a || !b || a.length !== b.length) return 64
+  let distance = 0
+  for (let i = 0; i < a.length; i++) {
+    const diff = Number.parseInt(a[i], 16) ^ Number.parseInt(b[i], 16)
+    distance += diff.toString(2).replace(/0/g, '').length
+  }
+  return distance
+}
+
+const DHASH_BITS = 64
 
 const RESERVED_PATHS = new Set([
   'config',
@@ -78,6 +103,32 @@ export interface CollectionResource {
   public_url?: string
 }
 
+export interface StagedImageInfo {
+  id: string
+  filename: string
+  originalName: string
+  source: string
+  reason: string
+  mime: string
+  size: number
+  createdAt: Date
+  hash: string
+  perceptualHash: string
+}
+
+export interface SimilarStagedImageGroup {
+  id: string
+  items: StagedImageInfo[]
+  similarity: number
+}
+
+export interface SimilarStagedImagesResult {
+  available: boolean
+  threshold: number
+  groups: SimilarStagedImageGroup[]
+  message: string
+}
+
 interface MemesLunaEndpointRow {
   id: string
   name: string
@@ -91,6 +142,19 @@ interface MemesLunaEndpointRow {
   proxy_settings: string
   created_at: Date
   updated_at: Date
+}
+
+interface MemesLunaStagedImageRow {
+  id: string
+  filename: string
+  original_name: string
+  source: string
+  reason: string
+  mime: string
+  size: number
+  created_at: Date
+  hash: string
+  perceptual_hash: string
 }
 
 export class MemesLunaService extends Service {
@@ -151,6 +215,8 @@ export class MemesLunaService extends Service {
         value: 'string',
         public_url: 'string',
         mime: 'string',
+        hash: 'string',
+        perceptual_hash: 'string',
         created_at: 'timestamp',
       },
       {
@@ -170,10 +236,34 @@ export class MemesLunaService extends Service {
         primary: 'collection',
       }
     )
+
+    this.ctx.database.extend(
+      'memesluna_staged_images',
+      {
+        id: 'string',
+        filename: 'string',
+        original_name: 'string',
+        source: 'string',
+        reason: 'string',
+        mime: 'string',
+        size: 'integer',
+        hash: 'string',
+        perceptual_hash: 'string',
+        created_at: 'timestamp',
+      },
+      {
+        primary: 'id',
+        unique: ['filename'],
+      }
+    )
   }
 
   private getStorageRoot() {
     return path.resolve(this.ctx.baseDir, this.config.storagePath || 'data/memesluna')
+  }
+
+  private getStagingDir() {
+    return path.join(this.getStorageRoot(), '.staging')
   }
 
   private getStorageBackend() {
@@ -226,6 +316,7 @@ export class MemesLunaService extends Service {
               type: 'local',
               value: newFilename,
               mime: this.getMimeByFilename(newFilename),
+              ...(await this.getImageFingerprints(await fs.readFile(newPath))),
               created_at: new Date(),
             })
           } catch {}
@@ -241,6 +332,7 @@ export class MemesLunaService extends Service {
               type: 'local',
               value: filename,
               mime: this.getMimeByFilename(filename),
+              ...(await this.getImageFingerprints(await fs.readFile(path.join(colDir, filename)))),
               created_at: new Date(),
             })
           }
@@ -269,6 +361,8 @@ export class MemesLunaService extends Service {
               type: 'external',
               value: link,
               mime: 'image/jpeg',
+              hash: '',
+              perceptual_hash: '',
               created_at: new Date(),
             })
           }
@@ -281,9 +375,210 @@ export class MemesLunaService extends Service {
 
   private async ensureStorage() {
     await fs.mkdir(this.getStorageRoot(), { recursive: true })
+    await fs.mkdir(this.getStagingDir(), { recursive: true })
     await this.syncExistingFilesToDatabase()
+    await this.backfillImageFingerprints()
   }
 
+  private async getImagePerceptualHash(buffer: Buffer): Promise<string> {
+    const sharp = loadSharp()
+    if (!sharp) return ''
+
+    try {
+      const raw = await sharp(buffer, { animated: false, failOn: 'none' })
+        .resize(9, 8, { fit: 'fill' })
+        .grayscale()
+        .raw()
+        .toBuffer()
+
+      if (raw.length < 72) return ''
+
+      let bits = ''
+      for (let y = 0; y < 8; y++) {
+        const row = y * 9
+        for (let x = 0; x < 8; x++) {
+          bits += raw[row + x] > raw[row + x + 1] ? '1' : '0'
+        }
+      }
+
+      let hex = ''
+      for (let i = 0; i < bits.length; i += 4) {
+        hex += Number.parseInt(bits.slice(i, i + 4), 2).toString(16)
+      }
+      return hex
+    } catch (error) {
+      this.ctx.logger('memesluna').debug(`Failed to calculate perceptual hash: ${(error as Error).message}`)
+      return ''
+    }
+  }
+
+  private async getImageFingerprints(buffer: Buffer): Promise<{ hash: string; perceptual_hash: string }> {
+    return {
+      hash: hashImageBuffer(buffer),
+      perceptual_hash: await this.getImagePerceptualHash(buffer),
+    }
+  }
+
+  private async getImageRowBuffer(row: any): Promise<Buffer | null> {
+    if (row.type === 'local') {
+      try {
+        return await fs.readFile(path.join(this.getCollectionDir(row.collection), row.value || row.filename))
+      } catch {
+        return null
+      }
+    }
+
+    if (row.type === 'storage') {
+      const backend = this.getStorageBackend()
+      if (!backend) return null
+      try {
+        return await backend.download(row.value)
+      } catch {
+        return null
+      }
+    }
+
+    return null
+  }
+
+  private async backfillImageFingerprints() {
+    const images = await this.ctx.database.get('memesluna_images', {})
+    for (const row of images) {
+      if (row.hash && row.perceptual_hash) continue
+      const buffer = await this.getImageRowBuffer(row)
+      if (!buffer) {
+        if (!row.hash || row.perceptual_hash === undefined) {
+          await this.ctx.database.set('memesluna_images', { id: row.id }, {
+            hash: row.hash || '',
+            perceptual_hash: row.perceptual_hash || '',
+          })
+        }
+        continue
+      }
+      await this.ctx.database.set('memesluna_images', { id: row.id }, await this.getImageFingerprints(buffer))
+    }
+
+    const stagedRows = await this.ctx.database.get('memesluna_staged_images', {})
+    for (const row of stagedRows) {
+      if (row.hash && row.perceptual_hash) continue
+      try {
+        const buffer = await fs.readFile(this.resolveStagedImagePath(row.filename))
+        await this.ctx.database.set('memesluna_staged_images', { id: row.id }, await this.getImageFingerprints(buffer))
+      } catch {
+        await this.ctx.database.set('memesluna_staged_images', { id: row.id }, {
+          hash: row.hash || '',
+          perceptual_hash: row.perceptual_hash || '',
+        })
+      }
+    }
+  }
+
+  async getDuplicateImageByHash(
+    hash: string,
+    options: { includeStaged?: boolean; includeImages?: boolean; ignoreStagedId?: string } = {}
+  ): Promise<string | null> {
+    if (!hash) return null
+
+    const includeStaged = options.includeStaged ?? true
+    const includeImages = options.includeImages ?? true
+
+    if (includeStaged) {
+      const stagedRows = await this.ctx.database.get('memesluna_staged_images', { hash })
+      const staged = stagedRows.find((row) => row.id !== options.ignoreStagedId)
+      if (staged) {
+        return `暂缓区/${staged.original_name || staged.filename}`
+      }
+    }
+
+    if (includeImages) {
+      const imageRows = await this.ctx.database.get('memesluna_images', { hash }, { limit: 1 })
+      if (imageRows.length) {
+        const image = imageRows[0]
+        return `${image.collection}/${image.filename}`
+      }
+    }
+
+    return null
+  }
+
+  private getHashSimilarity(a: string, b: string): number {
+    if (!a || !b || a.length !== b.length) return 0
+    return 1 - countHexBitDistance(a, b) / DHASH_BITS
+  }
+
+  async getSimilarStagedImages(threshold = this.config.similarityThreshold || 0.9): Promise<SimilarStagedImagesResult> {
+    const normalizedThreshold = Math.min(1, Math.max(0.5, Number(threshold) || 0.9))
+    const sharp = loadSharp()
+    if (!sharp) {
+      return {
+        available: false,
+        threshold: normalizedThreshold,
+        groups: [],
+        message: 'sharp 未安装，暂时无法筛选相似图片',
+      }
+    }
+
+    await this.backfillImageFingerprints()
+    const rows = await this.ctx.database.get('memesluna_staged_images', {})
+    const items = rows
+      .map((row) => this.mapStagedImage(row as MemesLunaStagedImageRow))
+      .filter((item) => item.perceptualHash)
+
+    const parent = new Map<string, string>()
+    const groupSimilarity = new Map<string, number>()
+    const find = (id: string): string => {
+      const current = parent.get(id) || id
+      if (current === id) return id
+      const root = find(current)
+      parent.set(id, root)
+      return root
+    }
+    const union = (a: string, b: string, similarity: number) => {
+      const rootA = find(a)
+      const rootB = find(b)
+      if (rootA === rootB) {
+        groupSimilarity.set(rootA, Math.max(groupSimilarity.get(rootA) || 0, similarity))
+        return
+      }
+      parent.set(rootB, rootA)
+      groupSimilarity.set(rootA, Math.max(groupSimilarity.get(rootA) || 0, groupSimilarity.get(rootB) || 0, similarity))
+    }
+
+    for (const item of items) parent.set(item.id, item.id)
+
+    for (let i = 0; i < items.length; i++) {
+      for (let j = i + 1; j < items.length; j++) {
+        const similarity = this.getHashSimilarity(items[i].perceptualHash, items[j].perceptualHash)
+        if (similarity >= normalizedThreshold) {
+          union(items[i].id, items[j].id, similarity)
+        }
+      }
+    }
+
+    const grouped = new Map<string, StagedImageInfo[]>()
+    for (const item of items) {
+      const root = find(item.id)
+      const list = grouped.get(root) || []
+      list.push(item)
+      grouped.set(root, list)
+    }
+
+    const groups = Array.from(grouped.entries())
+      .filter(([, list]) => list.length > 1)
+      .map(([root, list], index) => ({
+        id: `similar-${index + 1}`,
+        items: list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+        similarity: groupSimilarity.get(root) || normalizedThreshold,
+      }))
+      .sort((a, b) => b.items.length - a.items.length || b.similarity - a.similarity)
+
+    return {
+      available: true,
+      threshold: normalizedThreshold,
+      groups,
+      message: groups.length ? `找到 ${groups.length} 组相似图片` : '暂缓区没有达到阈值的相似图片',
+    }
+  }
   private isValidCollectionName(name: string): boolean {
     return !!name && COLLECTION_NAME_REGEXP.test(name) && !isReservedPath(name)
   }
@@ -402,6 +697,21 @@ export class MemesLunaService extends Service {
     return normalized
   }
 
+  private isStagedImageFile(filename: string): boolean {
+    return this.isImageFile(filename)
+  }
+
+  private ensureSafeStagedImageFilename(filename: string): string {
+    const normalized = path.basename(filename || '')
+    if (!filename || normalized !== filename || filename.includes('/') || filename.includes('\\')) {
+      throw new Error('Invalid staged image filename')
+    }
+    if (!this.isStagedImageFile(normalized)) {
+      throw new Error('Invalid staged image filename')
+    }
+    return normalized
+  }
+
   private getMimeByFilename(filename: string): string {
     const ext = path.extname(filename).toLowerCase()
     if (ext === '.png') return 'image/png'
@@ -411,6 +721,21 @@ export class MemesLunaService extends Service {
     if (ext === '.svg') return 'image/svg+xml'
     if (ext === '.tif' || ext === '.tiff') return 'image/tiff'
     return 'image/jpeg'
+  }
+
+  private mapStagedImage(row: MemesLunaStagedImageRow): StagedImageInfo {
+    return {
+      id: row.id,
+      filename: row.filename,
+      originalName: row.original_name || '',
+      source: row.source || '',
+      reason: row.reason || '',
+      mime: row.mime || this.getMimeByFilename(row.filename),
+      size: row.size || 0,
+      createdAt: row.created_at,
+      hash: row.hash || '',
+      perceptualHash: row.perceptual_hash || '',
+    }
   }
 
   private resolveLocalImagePath(collectionName: string, filename: string): string {
@@ -524,6 +849,8 @@ export class MemesLunaService extends Service {
           type: 'external',
           value: link,
           mime: 'image/jpeg',
+          hash: '',
+          perceptual_hash: '',
           created_at: new Date(),
         })
         addedCount++
@@ -579,6 +906,22 @@ export class MemesLunaService extends Service {
     return `${numericName}${finalExt}`
   }
 
+  private isAvifBuffer(buffer: Buffer): boolean {
+    return buffer.length >= 12 && buffer.toString('ascii', 4, 12) === 'ftypavif'
+  }
+
+  private buildStagedFilename(originalName: string | undefined, extHint: string | undefined): string {
+    const src = (originalName ?? '').trim()
+    const rawExt = (path.parse(src).ext || (extHint ? `.${extHint}` : '') || '.png').toLowerCase()
+    const normalizedExt = rawExt === '.jpeg' ? '.jpg' : rawExt
+    const finalExt = IMAGE_EXTENSIONS.has(normalizedExt) ? normalizedExt : '.png'
+    return `${Date.now()}-${randomUUID()}${finalExt}`
+  }
+
+  private resolveStagedImagePath(filename: string): string {
+    return path.join(this.getStagingDir(), this.ensureSafeStagedImageFilename(filename))
+  }
+
   private async deduplicateFilename(collectionDir: string, filename: string): Promise<string> {
     const parsed = path.parse(filename)
     let counter = 1
@@ -611,6 +954,12 @@ export class MemesLunaService extends Service {
       throw new Error('Invalid image base64 payload')
     }
 
+    const fingerprints = await this.getImageFingerprints(buffer)
+    const duplicate = await this.getDuplicateImageByHash(fingerprints.hash, { includeStaged: false, includeImages: true })
+    if (duplicate) {
+      throw new Error('Duplicate image already exists: ' + duplicate)
+    }
+
     // Determine the next index
     const maxImg = await this.ctx.database.get('memesluna_images', { collection: collectionName }, { limit: 1, sort: { index: 'desc' } })
     const index = maxImg.length ? maxImg[0].index + 1 : 1
@@ -635,6 +984,7 @@ export class MemesLunaService extends Service {
         value: result.key,
         public_url: result.publicUrl || '',
         mime: this.getMimeByFilename(finalName),
+        ...fingerprints,
         created_at: new Date(),
       })
     } else {
@@ -649,6 +999,7 @@ export class MemesLunaService extends Service {
         type: 'local',
         value: finalName,
         mime: this.getMimeByFilename(finalName),
+        ...fingerprints,
         created_at: new Date(),
       })
     }
@@ -656,6 +1007,114 @@ export class MemesLunaService extends Service {
     return finalName
   }
 
+
+  async addStagedImageBuffer(
+    buffer: Buffer,
+    originalName?: string,
+    source = 'filter',
+    reason = ''
+  ): Promise<StagedImageInfo> {
+    if (!buffer.length) {
+      throw new Error('Invalid image payload')
+    }
+
+    if (this.isAvifBuffer(buffer) || path.extname(originalName ?? '').toLowerCase() === '.avif') {
+      throw new Error('AVIF images are not staged. Convert to JPG/PNG/GIF/WEBP first.')
+    }
+
+    const fingerprints = await this.getImageFingerprints(buffer)
+    const duplicate = await this.getDuplicateImageByHash(fingerprints.hash, { includeStaged: true, includeImages: true })
+    if (duplicate) {
+      throw new Error('Duplicate image already exists: ' + duplicate)
+    }
+
+    const extHint = path.parse(originalName ?? '').ext.replace('.', '') || undefined
+    const filename = this.buildStagedFilename(originalName, extHint)
+    const mime = this.getMimeByFilename(filename)
+    const targetPath = this.resolveStagedImagePath(filename)
+    const now = new Date()
+
+    await fs.mkdir(this.getStagingDir(), { recursive: true })
+    await fs.writeFile(targetPath, buffer)
+
+    const row = {
+      id: randomUUID(),
+      filename,
+      original_name: originalName || filename,
+      source: source || 'filter',
+      reason: reason || '',
+      mime,
+      size: buffer.length,
+      ...fingerprints,
+      created_at: now,
+    }
+
+    await this.ctx.database.create('memesluna_staged_images', row)
+    return this.mapStagedImage(row)
+  }
+
+  async addStagedImageBase64(
+    base64Data: string,
+    originalName?: string,
+    source = 'filter',
+    reason = ''
+  ): Promise<StagedImageInfo> {
+    const { base64, extHint } = this.normalizeBase64(base64Data)
+    const buffer = Buffer.from(base64, 'base64')
+    const name = originalName || (extHint ? `filtered.${extHint}` : undefined)
+    return this.addStagedImageBuffer(buffer, name, source, reason)
+  }
+
+  async getStagedImages(): Promise<StagedImageInfo[]> {
+    const rows = await this.ctx.database.get('memesluna_staged_images', {})
+    return rows
+      .map((row) => this.mapStagedImage(row as MemesLunaStagedImageRow))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  }
+
+  async getStagedImageBuffer(id: string): Promise<{ buffer: Buffer; mime: string; filename: string } | null> {
+    const rows = await this.ctx.database.get('memesluna_staged_images', { id })
+    if (!rows.length) return null
+    const row = rows[0] as MemesLunaStagedImageRow
+
+    try {
+      const buffer = await fs.readFile(this.resolveStagedImagePath(row.filename))
+      return { buffer, mime: row.mime || this.getMimeByFilename(row.filename), filename: row.filename }
+    } catch {
+      return null
+    }
+  }
+
+  async deleteStagedImage(id: string): Promise<boolean> {
+    const rows = await this.ctx.database.get('memesluna_staged_images', { id })
+    if (!rows.length) return false
+    const row = rows[0] as MemesLunaStagedImageRow
+
+    try {
+      await fs.unlink(this.resolveStagedImagePath(row.filename))
+    } catch {}
+
+    await this.ctx.database.remove('memesluna_staged_images', { id })
+    return true
+  }
+
+  async promoteStagedImage(id: string, collectionName: string): Promise<string | null> {
+    this.ensureCollectionName(collectionName)
+    if (!(await this.collectionExists(collectionName))) {
+      throw new Error(`Collection not found: ${collectionName}`)
+    }
+
+    const rows = await this.ctx.database.get('memesluna_staged_images', { id })
+    if (!rows.length) return null
+    const row = rows[0] as MemesLunaStagedImageRow
+    const staged = await this.getStagedImageBuffer(id)
+    if (!staged) return null
+
+    const originalName = this.isImageFile(row.original_name) ? row.original_name : row.filename
+    const saved = await this.addLocalImageBase64(collectionName, staged.buffer.toString('base64'), originalName)
+    await this.deleteStagedImage(id)
+    return saved
+  }
   async deleteImageFromCollection(collectionName: string, filename: string): Promise<boolean> {
     this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
@@ -1014,6 +1473,8 @@ declare module 'koishi' {
       value: string
       public_url: string
       mime: string
+      hash: string
+      perceptual_hash: string
       created_at: Date
     }
     memesluna_collection_stats: {
@@ -1021,5 +1482,23 @@ declare module 'koishi' {
       api_call_count: number
       updated_at: Date
     }
+    memesluna_staged_images: {
+      id: string
+      filename: string
+      original_name: string
+      source: string
+      reason: string
+      mime: string
+      size: number
+      hash: string
+      perceptual_hash: string
+      created_at: Date
+    }
   }
 }
+
+
+
+
+
+

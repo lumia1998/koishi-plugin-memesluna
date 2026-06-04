@@ -12,6 +12,7 @@
           <span class="crumb-parent" v-if="activeMenu === 'resources'">表情包管理</span>
           <span class="crumb-parent" v-else-if="activeMenu === 'distribution'">分发管理</span>
           <span class="crumb-parent" v-else-if="activeMenu === 'settings'">预览</span>
+          <span class="crumb-parent" v-else-if="activeMenu === 'staging'">暂缓区</span>
           
           <template v-if="activeMenu === 'resources' && currentCollection">
             <span class="crumb-separator">/</span>
@@ -23,26 +24,34 @@
         <div class="header-quick-stats" v-if="!loading">
           <span class="stat-bubble">📂 表情包总数: {{ collections.length }}</span>
           <span class="stat-bubble">🌐 分发接口: {{ endpoints.length }}</span>
+          <span class="stat-bubble">🕓 暂缓候选: {{ stagedImages.length }}</span>
         </div>
       </header>
 
       <!-- NOTION-STYLE HORIZONTAL VIEW SWITCHER -->
       <div v-if="!currentCollection" class="notion-view-switcher">
-        <button 
+        <button
           @click="switchMainMenu('resources')"
           :class="['switcher-btn', activeMenu === 'resources' ? 'active' : '']"
         >
           <span class="switcher-icon">📦</span>
           <span class="switcher-label">表情包管理</span>
         </button>
-        <button 
+        <button
           @click="switchMainMenu('distribution')"
           :class="['switcher-btn', activeMenu === 'distribution' ? 'active' : '']"
         >
           <span class="switcher-icon">🌐</span>
           <span class="switcher-label">分发管理</span>
         </button>
-        <button 
+        <button
+          @click="switchMainMenu('staging')"
+          :class="['switcher-btn', activeMenu === 'staging' ? 'active' : '']"
+        >
+          <span class="switcher-icon">🕓</span>
+          <span class="switcher-label">暂缓区</span>
+        </button>
+        <button
           @click="switchMainMenu('settings')"
           :class="['switcher-btn', activeMenu === 'settings' ? 'active' : '']"
         >
@@ -711,7 +720,172 @@
           </div>
         </div>
 
-        <!-- MENU VIEW 3: PREVIEW (👁️ 预览) -->
+        <!-- MENU VIEW 3: STAGING (暂缓区) -->
+        <div v-else-if="activeMenu === 'staging'" class="staging-router-view">
+          <div class="notion-db-header page-section-header staging-page-header">
+            <div>
+              <h1 class="notion-main-title">暂缓区</h1>
+              <p class="section-desc compact">复核被上传过滤器拦截或自动收集的候选图片，再手动归档到表情包分组</p>
+            </div>
+            <div class="staging-header-actions">
+              <button
+                @click="toggleSimilarStagingMode"
+                :class="['btn', stagingViewMode === 'similar' ? 'btn-primary' : 'btn-secondary', 'btn-notion']"
+                :disabled="similarLoading || stagedImages.length < 2"
+              >
+                {{ similarLoading ? '筛选中...' : (stagingViewMode === 'similar' ? '显示全部' : '筛选相似图片') }}
+              </button>
+              <button @click="refreshStagedImages" class="btn btn-secondary btn-notion">
+                刷新列表
+              </button>
+            </div>
+          </div>
+
+          <div class="staging-toolbar">
+            <div class="asset-search-box staging-search-box">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <path d="m21 21-4.3-4.3"></path>
+              </svg>
+              <input v-model="stagingSearch" placeholder="搜索文件名、来源或原因" />
+            </div>
+            <div class="staging-count-pill">
+              {{ stagingViewMode === 'similar' ? similarStagedImages.length : filteredStagedImages.length }} / {{ stagedImages.length }} 张候选
+            </div>
+          </div>
+
+          <div v-if="!stagedImages.length" class="empty-placeholder-card staging-empty-card">
+            <div class="empty-icon">🕓</div>
+            <h3>暂缓区为空</h3>
+            <p>上传时被过滤器拦截或自动收集命中的候选图片会先保存在这里，等待人工复核。</p>
+          </div>
+
+          <div v-else-if="stagingViewMode === 'similar'" class="similar-staging-view">
+            <div v-if="similarLoading" class="empty-gallery">正在筛选相似图片...</div>
+            <div v-else-if="similarMessage" class="similar-message">{{ similarMessage }}</div>
+            <div v-if="!similarLoading && !filteredSimilarGroups.length" class="empty-gallery">
+              暂缓区没有匹配当前条件的相似图片
+            </div>
+            <section v-for="group in filteredSimilarGroups" :key="group.id" class="similar-group">
+              <div class="similar-group-header">
+                <div>
+                  <h3>相似组 {{ group.label }}</h3>
+                  <p>{{ group.items.length }} 张候选，最高相似度 {{ formatPercent(group.similarity) }}</p>
+                </div>
+              </div>
+              <div class="staging-grid">
+                <article v-for="item in group.items" :key="item.id" class="staging-card">
+                  <button class="staging-image-shell" @click="openImage(getStagedImageUrl(item.id))" title="打开原图">
+                    <img
+                      class="staging-image"
+                      :src="getStagedImageUrl(item.id)"
+                      :alt="item.originalName || item.filename"
+                      loading="lazy"
+                    />
+                  </button>
+
+                  <div class="staging-card-body">
+                    <div class="staging-title-row">
+                      <div class="staging-title" :title="item.originalName || item.filename">
+                        {{ item.originalName || item.filename }}
+                      </div>
+                      <span class="staging-ext-tag">{{ getImageExtension(item.filename) }}</span>
+                    </div>
+
+                    <div class="staging-meta-grid">
+                      <span :title="item.reason || '暂缓候选'">{{ item.reason || '暂缓候选' }}</span>
+                      <span>{{ item.source || 'filter' }}</span>
+                      <span>{{ formatSize(item.size) }}</span>
+                      <span>{{ formatDate(item.createdAt) }}</span>
+                    </div>
+
+                    <select v-model="stagingTargetCollection[item.id]" class="flat-select staging-select" :disabled="!collections.length">
+                      <option value="">选择目标表情包</option>
+                      <option v-for="collection in collections" :key="collection.name" :value="collection.name">
+                        {{ collection.name }}
+                      </option>
+                    </select>
+
+                    <div class="staging-actions">
+                      <button
+                        @click="promoteStagedImage(item)"
+                        class="btn btn-primary staging-action-btn"
+                        :disabled="stagingBusyId === item.id || !stagingTargetCollection[item.id]"
+                      >
+                        {{ stagingBusyId === item.id ? '处理中...' : '归档到表情包' }}
+                      </button>
+                      <button
+                        @click="deleteStagedImage(item)"
+                        class="btn btn-danger staging-action-btn"
+                        :disabled="stagingBusyId === item.id"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+          </div>
+
+          <div v-else-if="!filteredStagedImages.length" class="empty-gallery">
+            没有匹配当前搜索条件的暂缓图片
+          </div>
+
+          <div v-else class="staging-grid">
+            <article v-for="item in filteredStagedImages" :key="item.id" class="staging-card">
+              <button class="staging-image-shell" @click="openImage(getStagedImageUrl(item.id))" title="打开原图">
+                <img
+                  class="staging-image"
+                  :src="getStagedImageUrl(item.id)"
+                  :alt="item.originalName || item.filename"
+                  loading="lazy"
+                />
+              </button>
+
+              <div class="staging-card-body">
+                <div class="staging-title-row">
+                  <div class="staging-title" :title="item.originalName || item.filename">
+                    {{ item.originalName || item.filename }}
+                  </div>
+                  <span class="staging-ext-tag">{{ getImageExtension(item.filename) }}</span>
+                </div>
+
+                <div class="staging-meta-grid">
+                  <span :title="item.reason || '暂缓候选'">{{ item.reason || '暂缓候选' }}</span>
+                  <span>{{ item.source || 'filter' }}</span>
+                  <span>{{ formatSize(item.size) }}</span>
+                  <span>{{ formatDate(item.createdAt) }}</span>
+                </div>
+
+                <select v-model="stagingTargetCollection[item.id]" class="flat-select staging-select" :disabled="!collections.length">
+                  <option value="">选择目标表情包</option>
+                  <option v-for="collection in collections" :key="collection.name" :value="collection.name">
+                    {{ collection.name }}
+                  </option>
+                </select>
+
+                <div class="staging-actions">
+                  <button
+                    @click="promoteStagedImage(item)"
+                    class="btn btn-primary staging-action-btn"
+                    :disabled="stagingBusyId === item.id || !stagingTargetCollection[item.id]"
+                  >
+                    {{ stagingBusyId === item.id ? '处理中...' : '归档到表情包' }}
+                  </button>
+                  <button
+                    @click="deleteStagedImage(item)"
+                    class="btn btn-danger staging-action-btn"
+                    :disabled="stagingBusyId === item.id"
+                  >
+                    删除
+                  </button>
+                </div>
+              </div>
+            </article>
+          </div>
+        </div>
+        <!-- MENU VIEW 4: PREVIEW (👁️ 预览) -->
         <div v-else-if="activeMenu === 'settings'" class="settings-router-view">
           <div class="settings-preview-panel">
             <div class="notion-db-header page-section-header preview-page-header">
@@ -846,6 +1020,29 @@ interface EndpointInfo {
   method?: 'redirect'
 }
 
+interface StagedImageInfo {
+  id: string
+  filename: string
+  originalName: string
+  source: string
+  reason: string
+  mime: string
+  size: number
+  createdAt: string | Date
+  hash?: string
+  perceptualHash?: string
+}
+
+interface SimilarStagedImageGroup {
+  id: string
+  items: StagedImageInfo[]
+  similarity: number
+}
+
+interface SimilarStagedImageGroupView extends SimilarStagedImageGroup {
+  label: string
+}
+
 interface CollectionPreviewState {
   loading: boolean
   images: string[]
@@ -871,7 +1068,7 @@ interface PreviewRouteRow {
 }
 
 // Navigation states
-const activeMenu = ref<'resources' | 'distribution' | 'settings'>('resources')
+const activeMenu = ref<'resources' | 'distribution' | 'staging' | 'settings'>('resources')
 const loading = ref(true)
 
 // Core state data
@@ -879,6 +1076,14 @@ const backendPath = ref('/memesluna')
 const baseUrl = ref('http://localhost:5140')
 const endpoints = ref<EndpointInfo[]>([])
 const collections = ref<CollectionInfo[]>([])
+const stagedImages = ref<StagedImageInfo[]>([])
+const stagingSearch = ref('')
+const stagingTargetCollection = ref<Record<string, string>>({})
+const stagingBusyId = ref('')
+const stagingViewMode = ref<'all' | 'similar'>('all')
+const similarGroups = ref<SimilarStagedImageGroup[]>([])
+const similarLoading = ref(false)
+const similarMessage = ref('')
 
 // Endpoint Forms reactivity
 const showEndpointEditor = ref(false)
@@ -1073,6 +1278,35 @@ const filteredCollections = computed(() => {
   })
 })
 
+const filteredStagedImages = computed(() => {
+  const query = stagingSearch.value.trim().toLowerCase()
+  if (!query) return stagedImages.value
+  return stagedImages.value.filter((item) => {
+    return item.filename.toLowerCase().includes(query)
+      || item.originalName.toLowerCase().includes(query)
+      || item.source.toLowerCase().includes(query)
+      || item.reason.toLowerCase().includes(query)
+  })
+})
+const filteredSimilarGroups = computed<SimilarStagedImageGroupView[]>(() => {
+  const visibleIds = new Set(filteredStagedImages.value.map((item) => item.id))
+  return similarGroups.value
+    .map((group, index) => ({
+      ...group,
+      label: String(index + 1),
+      items: group.items.filter((item) => visibleIds.has(item.id)),
+    }))
+    .filter((group) => group.items.length > 1)
+})
+
+const similarStagedImages = computed(() => {
+  const map = new Map<string, StagedImageInfo>()
+  for (const group of filteredSimilarGroups.value) {
+    for (const item of group.items) map.set(item.id, item)
+  }
+  return Array.from(map.values())
+})
+
 // Settings preview values from backend
 const routeInventoryText = ref('')
 const llmPromptPreview = ref('')
@@ -1100,10 +1334,13 @@ function showToast(message: string, type: 'info' | 'success' | 'error' = 'info')
 }
 
 // Switches horizontal Notion view switcher
-function switchMainMenu(menu: 'resources' | 'distribution' | 'settings') {
+function switchMainMenu(menu: 'resources' | 'distribution' | 'staging' | 'settings') {
   activeMenu.value = menu
   if (menu === 'settings') {
     fetchSettingsPreview()
+  }
+  if (menu === 'staging') {
+    refreshStagedImages()
   }
 }
 
@@ -1123,6 +1360,10 @@ function getLocalImageApiUrl(collection: string, filename: string): string {
   return `${getBackendBaseUrl()}/api/admin/collections/${encodeURIComponent(collection)}/images/${encodeURIComponent(filename)}`
 }
 
+function getStagedImageUrl(id: string): string {
+  return `${getBackendBaseUrl()}/api/admin/staged-images/${encodeURIComponent(id)}`
+}
+
 function handlePreviewImageError(row: PreviewRouteRow) {
   if (row.type !== 'endpoint') return
   const next = new Set(failedEndpointPreviewIds.value)
@@ -1139,6 +1380,23 @@ function formatDate(value?: string | Date): string {
     month: '2-digit',
     day: '2-digit',
   })
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return '-'
+  return String(Math.round(value * 100)) + '%'
+}
+
+function formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '-'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex++
+  }
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`
 }
 
 function getImageExtension(filename: string): string {
@@ -1218,6 +1476,7 @@ async function fetchState() {
       if (state.backendPath) backendPath.value = state.backendPath
       endpoints.value = Array.isArray(state.endpoints) ? state.endpoints : []
       collections.value = Array.isArray(state.collections) ? state.collections : []
+      stagedImages.value = Array.isArray(state.stagedImages) ? state.stagedImages : []
       warmCollectionPreviews()
     }
   } catch (err) {
@@ -1236,6 +1495,114 @@ async function fetchSettingsPreview() {
   } catch (err) {
     console.error('Failed to sync settings variables preview:', err)
   }
+}
+
+async function refreshStagedImages() {
+  try {
+    const list = await send('memesluna/getStagedImages')
+    stagedImages.value = Array.isArray(list) ? list : []
+    if (stagingViewMode.value === 'similar') {
+      await loadSimilarStagedImages()
+    }
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '刷新暂缓区失败', 'error')
+  }
+}
+async function loadSimilarStagedImages() {
+  similarLoading.value = true
+  try {
+    const result = await send('memesluna/getSimilarStagedImages')
+    similarGroups.value = Array.isArray(result?.groups) ? result.groups : []
+    similarMessage.value = result?.message || ''
+    if (result && result.available === false) {
+      showToast(result.message || '相似图片筛选不可用', 'error')
+    }
+  } catch (err) {
+    similarGroups.value = []
+    similarMessage.value = ''
+    showToast(err instanceof Error ? err.message : '筛选相似图片失败', 'error')
+  } finally {
+    similarLoading.value = false
+  }
+}
+
+async function toggleSimilarStagingMode() {
+  if (stagingViewMode.value === 'similar') {
+    stagingViewMode.value = 'all'
+    return
+  }
+  stagingViewMode.value = 'similar'
+  await loadSimilarStagedImages()
+}
+
+async function promoteStagedImage(item: StagedImageInfo) {
+  const target = stagingTargetCollection.value[item.id]
+  if (!target) {
+    showToast('请选择目标表情包', 'error')
+    return
+  }
+  stagingBusyId.value = item.id
+  try {
+    const filename = await send('memesluna/promoteStagedImage', item.id, target)
+    if (filename) {
+      showToast(`已归档到表情包 "${target}"，新文件名 ${filename}`, 'success')
+      delete stagingTargetCollection.value[item.id]
+    } else {
+      showToast('暂缓图片不存在或已被处理', 'error')
+    }
+    await refreshStagedImages()
+    await fetchState()
+    if (currentCollection.value?.name === target) {
+      await loadCollectionResources(target)
+    }
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '归档暂缓图片失败', 'error')
+  } finally {
+    stagingBusyId.value = ''
+  }
+}
+
+async function deleteStagedImage(item: StagedImageInfo) {
+  if (!confirm(`确认从暂缓区删除 "${item.originalName || item.filename}" 吗？`)) return
+
+  stagingBusyId.value = item.id
+  try {
+    const deleted = await send('memesluna/deleteStagedImage', item.id)
+    if (deleted) {
+      showToast('已从暂缓区删除', 'success')
+      delete stagingTargetCollection.value[item.id]
+    } else {
+      showToast('暂缓图片不存在或已被处理', 'error')
+    }
+    await refreshStagedImages()
+    await fetchState()
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '删除暂缓图片失败', 'error')
+  } finally {
+    stagingBusyId.value = ''
+  }
+}
+
+async function stageFilteredFiles(items: Array<{ file: File; reason: string }>): Promise<number> {
+  let saved = 0
+  for (const item of items) {
+    try {
+      const base64 = await fileToBase64(item.file)
+      await send('memesluna/addStagedImage', {
+        base64,
+        originalName: item.file.name,
+        source: currentCollection.value ? `upload:${currentCollection.value.name}` : 'upload-filter',
+        reason: item.reason,
+      })
+      saved++
+    } catch (err) {
+      console.error('Failed to stage filtered image:', item.file.name, err)
+    }
+  }
+  if (saved) {
+    await refreshStagedImages()
+  }
+  return saved
 }
 
 // Actions: Endpoints
@@ -1492,35 +1859,60 @@ function onDrop(e: DragEvent) {
 async function uploadFiles(files: FileList) {
   if (!currentCollection.value) return
 
+  const maxSize = 10 * 1024 * 1024
   const fileList = Array.from(files)
-  const avifFiles = fileList.filter(f => f.name.toLowerCase().endsWith('.avif'))
-  if (avifFiles.length > 0) {
-    showToast('已自动拦截 avif 图片。QQ 机器人框架无法渲染及读取此格式。', 'error')
-    return
-  }
+  const imageFiles = fileList.filter((file) => {
+    const name = file.name.toLowerCase()
+    return file.type.startsWith('image/') || /\.(jpe?g|png|gif|bmp|webp|svg|tiff?|psd|avif)$/.test(name)
+  })
 
-  const imageFiles = fileList.filter(f => f.type.startsWith('image/'))
   if (!imageFiles.length) {
     showToast('请拖入或选择有效的图片格式文件', 'error')
     return
   }
 
-  if (imageFiles.length > 50) {
+  const avifFiles = imageFiles.filter((file) => file.name.toLowerCase().endsWith('.avif'))
+  const compatibleImageFiles = imageFiles.filter((file) => !file.name.toLowerCase().endsWith('.avif'))
+  const stagingMap = new Map<File, string>()
+
+  for (const file of compatibleImageFiles) {
+    if (file.size > maxSize) {
+      stagingMap.set(file, '文件大小超过 10MB，需人工复核后再决定是否归档')
+    }
+  }
+
+  const stagingItems = Array.from(stagingMap, ([file, reason]) => ({ file, reason }))
+  const uploadableFiles = compatibleImageFiles.filter((file) => !stagingMap.has(file))
+
+  let stagedCount = 0
+  if (stagingItems.length) {
+    stagedCount = await stageFilteredFiles(stagingItems)
+  }
+
+  if (!uploadableFiles.length) {
+    if (stagedCount > 0) {
+      const avifHint = avifFiles.length ? `，${avifFiles.length} 张 AVIF 已直接拦截` : ''
+      showToast(`已将 ${stagedCount} 张被过滤图片放入暂缓区${avifHint}`, 'success')
+    } else if (avifFiles.length) {
+      showToast('已拦截 AVIF 图片。此格式不会进入暂缓区，请先转码为 JPG/PNG/GIF/WEBP。', 'error')
+    } else {
+      showToast('图片已被过滤，但写入暂缓区失败', 'error')
+    }
+    await fetchState()
+    return
+  }
+
+  if (uploadableFiles.length > 50) {
     showToast('单次上传表情上限为 50 张，请分批次导入', 'error')
+    if (stagedCount) await fetchState()
     return
   }
 
-  const oversizedFiles = imageFiles.filter(f => f.size > 10 * 1024 * 1024)
-  if (oversizedFiles.length > 0) {
-    showToast('已拦截大小超出 10MB 的单个图片素材', 'error')
-    return
-  }
-
-  showToast(`正在转码并上传 ${imageFiles.length} 张表情图片...`, 'info')
+  showToast(`正在转码并上传 ${uploadableFiles.length} 张表情图片...`, 'info')
 
   try {
     const payloadImages = []
-    for (const file of imageFiles) {
+    for (const file of uploadableFiles) {
       const base64 = await fileToBase64(file)
       payloadImages.push({
         base64,
@@ -1539,7 +1931,9 @@ async function uploadFiles(files: FileList) {
     if (response.ok) {
       const resData = await response.json()
       if (resData.ok && resData.uploaded && resData.uploaded.length > 0) {
-        showToast(`成功将 ${resData.uploaded.length} 张表情入库并完成数字重命名`, 'success')
+        const stagedHint = stagedCount ? `，另有 ${stagedCount} 张进入暂缓区` : ''
+        const avifHint = avifFiles.length ? `，${avifFiles.length} 张 AVIF 已直接拦截` : ''
+        showToast(`成功将 ${resData.uploaded.length} 张表情入库并完成数字重命名${stagedHint}${avifHint}`, 'success')
       } else {
         showToast('上传图片写入失败', 'error')
       }
@@ -3459,6 +3853,204 @@ watch([collectionSearchQuery, collectionFilter], () => {
   gap: 6px;
 }
 
+/* VIEW 2.5: STAGING REVIEW */
+.staging-router-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.staging-page-header {
+  margin-bottom: 4px;
+}
+.staging-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.similar-staging-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.similar-message {
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.58));
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.similar-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
+}
+
+.similar-group:first-of-type {
+  padding-top: 0;
+  border-top: none;
+}
+
+.similar-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.similar-group-header h3 {
+  margin: 0;
+  color: var(--k-text-normal, #111827);
+  font-size: 0.96rem;
+  font-weight: 750;
+}
+
+.similar-group-header p {
+  margin: 4px 0 0;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.58));
+  font-size: 0.74rem;
+}
+
+.staging-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.06));
+  border-bottom: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.06));
+}
+
+.staging-search-box {
+  max-width: 420px;
+}
+
+.staging-count-pill {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 999px;
+  background-color: var(--k-bg-panel, rgba(15, 23, 42, 0.05));
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.58));
+  font-size: 0.76rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.staging-empty-card {
+  margin-top: 8px;
+}
+
+.staging-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.staging-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.09));
+  border-radius: 8px;
+  background-color: var(--k-bg-card, #ffffff);
+  box-shadow: none;
+}
+
+.staging-image-shell {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
+  background-color: var(--k-bg-panel, #f8fafc);
+  cursor: pointer;
+}
+
+.staging-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.staging-card-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.staging-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.staging-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--k-text-normal, #111827);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.staging-ext-tag {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background-color: var(--memesluna-primary-soft-bg);
+  color: var(--k-color-primary, #2563eb);
+  font-size: 0.66rem;
+  font-weight: 750;
+}
+
+.staging-meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.58));
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.staging-meta-grid span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.staging-select {
+  width: 100%;
+  height: 34px;
+}
+
+
+.staging-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.staging-action-btn {
+  min-width: 0;
+  width: 100%;
+  white-space: nowrap;
+}
+
 /* VIEW 2: DISTRIBUTION / ENDPOINT GRID */
 .page-section-header {
   align-items: center;
@@ -4154,6 +4746,10 @@ watch([collectionSearchQuery, collectionFilter], () => {
   .preview-dashboard-grid {
     grid-template-columns: 1fr;
   }
+
+  .staging-grid {
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  }
 }
 
 @media (max-width: 780px) {
@@ -4176,7 +4772,8 @@ watch([collectionSearchQuery, collectionFilter], () => {
 
   .notion-db-actions,
   .bulk-actions,
-  .form-actions {
+  .form-actions,
+  .staging-header-actions {
     width: 100%;
   }
 
@@ -4213,6 +4810,16 @@ watch([collectionSearchQuery, collectionFilter], () => {
   }
 
   .preview-action-btn {
+    width: 100%;
+  }
+
+  .staging-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .staging-search-box {
+    max-width: none;
     width: 100%;
   }
 
@@ -4286,5 +4893,18 @@ watch([collectionSearchQuery, collectionFilter], () => {
   .notion-gallery-grid {
     grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
   }
+
+  .staging-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .staging-actions {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
+
+
+
+
+

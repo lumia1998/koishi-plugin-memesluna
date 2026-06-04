@@ -6,7 +6,7 @@ import type {} from 'koishi-plugin-chatluna'
 
 import { Context, h } from 'koishi'
 import { Config } from './config'
-import { MemesLunaService, isReservedPath } from './service'
+import { MemesLunaService, hashImageBuffer, isReservedPath } from './service'
 
 function guessMimeByExt(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase()
@@ -168,15 +168,84 @@ function toStringArray(value: unknown): string[] {
     .filter((item) => item.length > 0)
 }
 
+interface AutoCollectFrequencyRecord {
+  timestamps: number[]
+  staged: boolean
+}
+
+interface AutoCollectDailyLimitRecord {
+  day: string
+  count: number
+}
+
+const autoCollectFrequencyTracker = new Map<string, AutoCollectFrequencyRecord>()
+const autoCollectDailyLimits = new Map<string, AutoCollectDailyLimitRecord>()
+
+function getMessageImages(session: any): string[] {
+  const elements = session.elements || []
+  return h
+    .select(elements, 'image')
+    .concat(h.select(elements, 'img'))
+    .map((img) => img.attrs.url || img.attrs.src)
+    .filter(Boolean)
+}
+
+function getSessionGroupId(session: any): string {
+  return session.guildId || session.channelId || ''
+}
+
+function getDailyKey(timestamp = Date.now()): string {
+  return new Date(timestamp).toISOString().slice(0, 10)
+}
+
+function hitDailyAutoCollectLimit(groupId: string, limit: number): boolean {
+  const day = getDailyKey()
+  const current = autoCollectDailyLimits.get(groupId)
+  if (!current || current.day !== day) {
+    autoCollectDailyLimits.set(groupId, { day, count: 1 })
+    return false
+  }
+  if (current.count >= limit) return true
+  current.count++
+  return false
+}
+
+function trackImageFrequency(hash: string, groupId: string, windowMs: number): { count: number; alreadyStaged: boolean } {
+  const now = Date.now()
+  const key = `${groupId}:${hash}`
+  const record = autoCollectFrequencyTracker.get(key) || { timestamps: [], staged: false }
+  record.timestamps = record.timestamps.filter((timestamp) => now - timestamp <= windowMs)
+  record.timestamps.push(now)
+  autoCollectFrequencyTracker.set(key, record)
+  return { count: record.timestamps.length, alreadyStaged: record.staged }
+}
+
+function markImageFrequencyStaged(hash: string, groupId: string) {
+  const key = `${groupId}:${hash}`
+  const record = autoCollectFrequencyTracker.get(key)
+  if (record) record.staged = true
+}
+
+function cleanupAutoCollectFrequency(windowMs: number) {
+  const now = Date.now()
+  for (const [key, record] of autoCollectFrequencyTracker.entries()) {
+    record.timestamps = record.timestamps.filter((timestamp) => now - timestamp <= windowMs)
+    if (!record.timestamps.length) {
+      autoCollectFrequencyTracker.delete(key)
+    }
+  }
+}
 async function buildAdminState(service: MemesLunaService) {
   const endpoints = await service.getEndpoints()
   const collectionNames = await service.getCollections()
   const collections = await Promise.all(collectionNames.map((name) => service.getCollectionInfo(name)))
+  const stagedImages = await service.getStagedImages()
 
   return {
     endpoints,
     collectionNames,
     collections: collections.filter(Boolean),
+    stagedImages,
   }
 }
 
@@ -231,10 +300,12 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
         collections.map(async (name) => service.getCollectionInfo(name))
       )
 
+      const stagedImages = await service.getStagedImages()
       return {
         backendPath: config.backendPath,
         endpoints,
         collections: detailedCollections.filter(Boolean),
+        stagedImages,
       }
     })
   )
@@ -315,11 +386,113 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
     })
   )
 
+  consoleService.addListener(
+    'memesluna/getStagedImages',
+    withReady(async () => {
+      return await service.getStagedImages()
+    })
+  )
+  consoleService.addListener(
+    'memesluna/getSimilarStagedImages',
+    withReady(async () => {
+      return await service.getSimilarStagedImages(config.similarityThreshold)
+    })
+  )
+
+  consoleService.addListener(
+    'memesluna/addStagedImage',
+    withReady(async (payload: any) => {
+      return await service.addStagedImageBase64(
+        toTrimmedString(payload?.base64),
+        toTrimmedString(payload?.originalName) || undefined,
+        toTrimmedString(payload?.source) || 'filter',
+        toTrimmedString(payload?.reason)
+      )
+    })
+  )
+
+  consoleService.addListener(
+    'memesluna/deleteStagedImage',
+    withReady(async (id: string) => {
+      return await service.deleteStagedImage(id)
+    })
+  )
+
+  consoleService.addListener(
+    'memesluna/promoteStagedImage',
+    withReady(async (id: string, collectionName: string) => {
+      return await service.promoteStagedImage(id, collectionName)
+    })
+  )
   consoleService.addListener('memesluna/getBaseUrl', async () => {
     return `${toAbsoluteBaseUrl(ctx, config)}${config.backendPath}`
   })
 }
 
+
+function applyAutoCollect(ctx: Context, config: Config) {
+  if (!config.autoCollect) return
+
+  const whitelist = new Set((config.whitelistGroups || []).map((group) => group.trim()).filter(Boolean))
+
+  const windowMinutes = Math.max(1, config.emojiFrequencyWindowMinutes || 10)
+  const windowMs = windowMinutes * 60 * 1000
+  const threshold = Math.max(1, config.emojiFrequencyThreshold || 3)
+  const minBytes = Math.max(0, config.minEmojiSize || 50) * 1024
+  const maxBytes = Math.max(1, config.maxEmojiSize || 15) * 1024 * 1024
+  const dailyLimit = Math.max(1, config.groupAutoCollectLimit || 300)
+
+  ctx.on('message', async (session) => {
+    if (session.isDirect) return
+
+    const groupId = getSessionGroupId(session)
+    if (!groupId) return
+    if (whitelist.size && !whitelist.has(groupId)) return
+
+    const imageUrls = getMessageImages(session)
+    if (!imageUrls.length) return
+
+    const service = ctx.memesluna
+    await service.ready
+
+    for (const url of imageUrls) {
+      try {
+        const buffer = await downloadImage(ctx, url)
+        const ext = getExtFromMagicBytes(buffer)
+        if (!ext) continue
+        if (buffer.length < minBytes || buffer.length > maxBytes) continue
+
+        const hash = hashImageBuffer(buffer)
+        const frequency = trackImageFrequency(hash, groupId, windowMs)
+        if (frequency.alreadyStaged || frequency.count < threshold) continue
+
+        const duplicate = await service.getDuplicateImageByHash(hash, { includeStaged: true, includeImages: true })
+        if (duplicate) {
+          markImageFrequencyStaged(hash, groupId)
+          continue
+        }
+
+        if (hitDailyAutoCollectLimit(groupId, dailyLimit)) {
+          ctx.logger('memesluna').debug(`Auto collect daily limit reached for group ${groupId}`)
+          continue
+        }
+
+        await service.addStagedImageBuffer(
+          buffer,
+          `auto-${Date.now()}${ext}`,
+          `auto:${groupId}`,
+          `${windowMinutes} 分钟内出现 ${frequency.count} 次`
+        )
+        markImageFrequencyStaged(hash, groupId)
+      } catch (error) {
+        ctx.logger('memesluna').debug(`Auto collect image skipped: ${(error as Error).message}`)
+      }
+    }
+  })
+
+  ctx.setInterval(() => cleanupAutoCollectFrequency(windowMs), Math.max(60 * 1000, windowMs))
+  ctx.logger('memesluna').info(`Auto collect started: ${windowMinutes}m/${threshold} times, ${config.minEmojiSize || 50}KB-${config.maxEmojiSize || 15}MB, ${dailyLimit}/day/group`)
+}
 function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
   if (!ctx.server) return
 
@@ -389,6 +562,42 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     }
 
     koa.body = { ok: true }
+  })
+
+  ctx.server.get(`${basePath}/api/admin/staged-images/similar`, async (koa) => {
+    koa.body = await service.getSimilarStagedImages(config.similarityThreshold)
+  })
+  ctx.server.get(`${basePath}/api/admin/staged-images/:id`, async (koa) => {
+    const id = toTrimmedString(koa.params.id)
+    const image = await service.getStagedImageBuffer(id)
+    if (!image) {
+      koa.status = 404
+      koa.body = { error: 'Staged image not found' }
+      return
+    }
+
+    koa.status = 200
+    koa.set('Content-Type', image.mime)
+    koa.body = image.buffer
+  })
+
+  ctx.server.post(`${basePath}/api/admin/staged-images`, async (koa) => {
+    const body = getRequestBody(koa)
+    const base64 = toTrimmedString(body.base64)
+    if (!base64) {
+      koa.status = 400
+      koa.body = { error: 'base64 is required' }
+      return
+    }
+
+    const staged = await service.addStagedImageBase64(
+      base64,
+      toTrimmedString(body.originalName) || undefined,
+      toTrimmedString(body.source) || 'filter',
+      toTrimmedString(body.reason)
+    )
+
+    koa.body = { ok: true, staged }
   })
 
   ctx.server.patch(`${basePath}/api/admin/collections/:name/description`, async (koa) => {
@@ -656,6 +865,7 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
 
 export function apply(ctx: Context, config: Config) {
   ctx.plugin(MemesLunaService, config)
+  applyAutoCollect(ctx, config)
 
   ctx.inject(['memesluna', 'server'], async (ctx) => {
     const service = ctx.memesluna
@@ -762,7 +972,7 @@ export function apply(ctx: Context, config: Config) {
         const buffer = await downloadImage(ctx, url)
         const ext = getExtFromMagicBytes(buffer)
         if (!ext) {
-          return '图片格式不兼容，仅支持 JPG/PNG/GIF/WEBP/BMP 格式图片（已拒绝 AVIF）'
+          return '图片格式不兼容，仅支持 JPG/PNG/GIF/WEBP/BMP 格式图片（已拒绝 AVIF，且不会放入暂缓区）'
         }
 
         const base64 = buffer.toString('base64')
@@ -811,3 +1021,8 @@ export * from './config'
 export * from './service'
 
 export const inject = ['database', 'chatluna', 'server']
+
+
+
+
+
