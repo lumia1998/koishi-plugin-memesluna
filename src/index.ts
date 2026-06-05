@@ -1,6 +1,6 @@
 import fs from 'fs/promises'
+import { existsSync } from 'fs'
 import path from 'path'
-import { createRequire } from 'module'
 import type {} from '@koishijs/plugin-console'
 import type {} from 'koishi-plugin-chatluna'
 
@@ -264,20 +264,17 @@ async function updateMemesVariable(ctx: Context, config: Config, service: MemesL
 }
 
 function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
-  console.log('[MemesLuna] applyConsole started!');
   if (!ctx.console) {
-    console.log('[MemesLuna] ctx.console is missing!');
-    return;
+    return
   }
 
-  const consoleService = ctx.console as any;
+  const consoleService = ctx.console as any
 
-  // plugin-console 安全检查要求 prod 路径必须包含 'node_modules' 或者以 this.root 开头
-  // Windows Junction 被 require.resolve 跟随到真实路径（不含 node_modules），会触发 403
-  // 解决方案：通过 ctx.baseDir（Koishi 根目录）直接拼出含 node_modules 字符串的路径
-  const devPath = path.resolve(__dirname, '..', 'client/index.ts');
-  const prodPath = path.join(ctx.baseDir, 'node_modules', 'koishi-plugin-memesluna', 'dist');
-  console.log('[MemesLuna] Registering console entry:', { dev: devPath, prod: prodPath });
+  const packageBase = path.resolve(__dirname, '..')
+  const installedBase = path.resolve(ctx.baseDir, 'node_modules', 'koishi-plugin-memesluna')
+  const consoleBase = existsSync(installedBase) ? installedBase : packageBase
+  const devPath = path.resolve(consoleBase, 'client/index.ts')
+  const prodPath = path.resolve(consoleBase, 'dist')
 
   const withReady = <T extends unknown[], R>(handler: (...args: T) => Promise<R> | R) => {
     return async (...args: T): Promise<R> => {
@@ -874,7 +871,6 @@ export function apply(ctx: Context, config: Config) {
   })
 
   ctx.inject(['memesluna', 'console'], async (ctx) => {
-    console.log('[MemesLuna] Console inject hook triggered!');
     const service = ctx.memesluna
     applyConsole(ctx, config, service)
   })

@@ -21,10 +21,20 @@ export function hashImageBuffer(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex')
 }
 
-function loadSharp(): any | null {
+function loadOptionalSharp(): any | null {
   try {
-    const sharpModule = require('sharp')
+    const packageName = 'sharp'
+    const sharpModule = require(packageName)
     return sharpModule.default || sharpModule
+  } catch {
+    return null
+  }
+}
+
+function loadPhoton(): any | null {
+  try {
+    const packageName = '@cf-wasm/photon/node'
+    return require(packageName)
   } catch {
     return null
   }
@@ -41,6 +51,36 @@ function countHexBitDistance(a: string, b: string): number {
 }
 
 const DHASH_BITS = 64
+const DHASH_WIDTH = 9
+const DHASH_HEIGHT = 8
+
+function lumaFromRgba(data: Buffer | Uint8Array, offset: number): number {
+  const alpha = data[offset + 3] / 255
+  const r = data[offset] * alpha + 255 * (1 - alpha)
+  const g = data[offset + 1] * alpha + 255 * (1 - alpha)
+  const b = data[offset + 2] * alpha + 255 * (1 - alpha)
+  return 0.299 * r + 0.587 * g + 0.114 * b
+}
+
+function buildDhashFromRgbaPixels(raw: Buffer | Uint8Array): string {
+  if (raw.length < DHASH_WIDTH * DHASH_HEIGHT * 4) return ''
+
+  let bits = ''
+  for (let y = 0; y < DHASH_HEIGHT; y++) {
+    const row = y * DHASH_WIDTH * 4
+    for (let x = 0; x < DHASH_WIDTH - 1; x++) {
+      const left = lumaFromRgba(raw, row + x * 4)
+      const right = lumaFromRgba(raw, row + (x + 1) * 4)
+      bits += left > right ? '1' : '0'
+    }
+  }
+
+  let hex = ''
+  for (let i = 0; i < bits.length; i += 4) {
+    hex += Number.parseInt(bits.slice(i, i + 4), 2).toString(16)
+  }
+  return hex
+}
 
 const RESERVED_PATHS = new Set([
   'config',
@@ -381,7 +421,28 @@ export class MemesLunaService extends Service {
   }
 
   private async getImagePerceptualHash(buffer: Buffer): Promise<string> {
-    const sharp = loadSharp()
+    const photon = loadPhoton()
+    if (photon) {
+      let inputImage: any | null = null
+      let resizedImage: any | null = null
+      try {
+        inputImage = photon.PhotonImage.new_from_byteslice(new Uint8Array(buffer))
+        resizedImage = photon.resize(inputImage, DHASH_WIDTH, DHASH_HEIGHT, photon.SamplingFilter.Nearest)
+        const hash = buildDhashFromRgbaPixels(resizedImage.get_raw_pixels())
+        if (hash) return hash
+      } catch (error) {
+        this.ctx.logger('memesluna').debug(`Failed to calculate perceptual hash with photon: ${(error as Error).message}`)
+      } finally {
+        try {
+          resizedImage?.free?.()
+        } catch {}
+        try {
+          inputImage?.free?.()
+        } catch {}
+      }
+    }
+
+    const sharp = loadOptionalSharp()
     if (!sharp) return ''
 
     try {
@@ -508,21 +569,20 @@ export class MemesLunaService extends Service {
 
   async getSimilarStagedImages(threshold = this.config.similarityThreshold || 0.9): Promise<SimilarStagedImagesResult> {
     const normalizedThreshold = Math.min(1, Math.max(0.5, Number(threshold) || 0.9))
-    const sharp = loadSharp()
-    if (!sharp) {
-      return {
-        available: false,
-        threshold: normalizedThreshold,
-        groups: [],
-        message: 'sharp 未安装，暂时无法筛选相似图片',
-      }
-    }
-
     await this.backfillImageFingerprints()
     const rows = await this.ctx.database.get('memesluna_staged_images', {})
     const items = rows
       .map((row) => this.mapStagedImage(row as MemesLunaStagedImageRow))
       .filter((item) => item.perceptualHash)
+
+    if (!items.length) {
+      return {
+        available: true,
+        threshold: normalizedThreshold,
+        groups: [],
+        message: rows.length ? '暂缓区图片暂未生成可比较的感知哈希' : '暂缓区暂无图片',
+      }
+    }
 
     const parent = new Map<string, string>()
     const groupSimilarity = new Map<string, number>()
