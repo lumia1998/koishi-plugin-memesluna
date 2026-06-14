@@ -856,6 +856,28 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
 
     setKoaResponse(koa, result)
   })
+
+  ctx.server.get(`${basePath}/:name/:filename`, async (koa) => {
+    const collectionName = toTrimmedString(koa.params.name)
+    const filename = toTrimmedString(koa.params.filename)
+
+    if (isReservedPath(collectionName)) {
+      koa.status = 404
+      koa.body = { error: 'Not Found' }
+      return
+    }
+
+    const image = await service.getLocalImageBuffer(collectionName, filename)
+    if (!image) {
+      koa.status = 404
+      koa.body = { error: 'Image not found' }
+      return
+    }
+
+    koa.status = 200
+    koa.set('Content-Type', image.mime)
+    koa.body = image.buffer
+  })
 }
 
 export function apply(ctx: Context, config: Config) {

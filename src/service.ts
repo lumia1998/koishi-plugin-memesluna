@@ -4,6 +4,13 @@ import path from 'path'
 import { Context, Service, Eval } from 'koishi'
 import type { Config } from './config'
 
+export function sanitizeFilename(filename: string): string {
+  const ext = path.extname(filename).toLowerCase()
+  const base = path.basename(filename, ext)
+  const safeBase = base.replace(/[\s/\\?%*:|"<>,;=@]/g, '_')
+  return `${safeBase}${ext}`
+}
+
 const IMAGE_EXTENSIONS = new Set([
   '.jpg',
   '.jpeg',
@@ -333,58 +340,46 @@ export class MemesLunaService extends Service {
 
       // Fetch all registered images for this collection at once
       const existingImages = await this.ctx.database.get('memesluna_images', { collection: colName })
-      const existingIndices = new Set(existingImages.map((img) => img.index))
+      const existingFilenames = new Set(existingImages.map((img) => img.filename))
       const existingExternalValues = new Set(
         existingImages.filter((img) => img.type === 'external').map((img) => img.value)
       )
+      const existingIndices = new Set(existingImages.map((img) => img.index))
       let maxIndex = existingImages.reduce((max, img) => Math.max(max, img.index), 0)
 
       // Sync local files
       for (const filename of files) {
-        const ext = path.extname(filename).toLowerCase()
-        const basename = path.basename(filename, ext)
-        let index = parseInt(basename, 10)
+        const safeName = sanitizeFilename(filename)
+        let currentName = filename
 
-        // Check if filename is not pure sequential number
-        if (isNaN(index) || String(index) !== basename || index < 1 || index > 99999) {
-          index = ++maxIndex
-          const newFilename = `${index}${ext}`
+        // Rename on disk if the name was not safe
+        if (safeName !== filename) {
           const oldPath = path.join(colDir, filename)
-          const newPath = path.join(colDir, newFilename)
+          const newPath = path.join(colDir, safeName)
           try {
             await fs.rename(oldPath, newPath)
+            currentName = safeName
+          } catch {}
+        }
+
+        // Check if already registered
+        if (!existingFilenames.has(currentName)) {
+          const index = ++maxIndex
+          const fullPath = path.join(colDir, currentName)
+          try {
             await this.ctx.database.create('memesluna_images', {
               id: randomUUID(),
               collection: colName,
               index,
-              filename: newFilename,
+              filename: currentName,
               type: 'local',
-              value: newFilename,
-              mime: this.getMimeByFilename(newFilename),
-              ...(await this.getImageFingerprints(await fs.readFile(newPath))),
+              value: currentName,
+              mime: this.getMimeByFilename(currentName),
+              ...(await this.getImageFingerprints(await fs.readFile(fullPath))),
               created_at: new Date(),
             })
-            existingIndices.add(index)
+            existingFilenames.add(currentName)
           } catch {}
-        } else {
-          // Check if already registered
-          if (!existingIndices.has(index)) {
-            try {
-              await this.ctx.database.create('memesluna_images', {
-                id: randomUUID(),
-                collection: colName,
-                index,
-                filename,
-                type: 'local',
-                value: filename,
-                mime: this.getMimeByFilename(filename),
-                ...(await this.getImageFingerprints(await fs.readFile(path.join(colDir, filename)))),
-                created_at: new Date(),
-              })
-              existingIndices.add(index)
-              maxIndex = Math.max(maxIndex, index)
-            } catch {}
-          }
         }
       }
 
@@ -1012,6 +1007,21 @@ export class MemesLunaService extends Service {
     }
   }
 
+  private async deduplicateDatabaseFilename(collectionName: string, filename: string): Promise<string> {
+    const parsed = path.parse(filename)
+    let counter = 1
+    let candidate = filename
+
+    while (true) {
+      const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName, filename: candidate })
+      if (!rows.length) {
+        return candidate
+      }
+      candidate = `${parsed.name}_${counter}${parsed.ext}`
+      counter++
+    }
+  }
+
   async addLocalImageBuffer(
     collectionName: string,
     buffer: Buffer,
@@ -1042,7 +1052,10 @@ export class MemesLunaService extends Service {
     if (!IMAGE_EXTENSIONS.has(finalExt)) {
       throw new Error('Unsupported image format')
     }
-    const finalName = `${index}${finalExt}`
+
+    const baseName = originalName ? path.basename(originalName, path.extname(originalName)) : `image-${Date.now()}`
+    const safeBase = sanitizeFilename(`${baseName}${finalExt}`)
+    const finalName = await this.deduplicateDatabaseFilename(collectionName, safeBase)
 
     const backend = this.getStorageBackend()
     if (backend) {
