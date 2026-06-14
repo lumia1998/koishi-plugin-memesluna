@@ -139,7 +139,6 @@ export interface CollectionInfo {
   hasContent: boolean
   createdAt?: Date
   updatedAt?: Date
-  apiCallCount: number
   cover?: string
 }
 
@@ -273,17 +272,7 @@ export class MemesLunaService extends Service {
       }
     )
 
-    this.ctx.database.extend(
-      'memesluna_collection_stats',
-      {
-        collection: 'string',
-        api_call_count: 'integer',
-        updated_at: 'timestamp',
-      },
-      {
-        primary: 'collection',
-      }
-    )
+
 
     this.ctx.database.extend(
       'memesluna_staged_images',
@@ -1347,8 +1336,6 @@ export class MemesLunaService extends Service {
     const updatedAt = dates.length
       ? new Date(Math.max(...dates.map((date) => date.getTime()), statUpdatedAt?.getTime() || 0))
       : statUpdatedAt
-    const apiCallCount = await this.getCollectionApiCallCount(collectionName)
-
     return {
       name: collectionName,
       description,
@@ -1358,41 +1345,11 @@ export class MemesLunaService extends Service {
       hasContent: localImages.length > 0 || links.length > 0,
       createdAt,
       updatedAt,
-      apiCallCount,
       cover: localImages[0],
     }
   }
 
-  async getCollectionApiCallCount(collectionName: string): Promise<number> {
-    if (!this.isValidCollectionName(collectionName)) {
-      return 0
-    }
 
-    const rows = await this.ctx.database.get('memesluna_collection_stats', { collection: collectionName })
-    return rows[0]?.api_call_count || 0
-  }
-
-  async incrementCollectionApiCallCount(collectionName: string): Promise<void> {
-    if (!this.isValidCollectionName(collectionName)) {
-      return
-    }
-
-    const rows = await this.ctx.database.get('memesluna_collection_stats', { collection: collectionName })
-    const now = new Date()
-    if (rows.length) {
-      await this.ctx.database.set('memesluna_collection_stats', { collection: collectionName }, {
-        api_call_count: (rows[0].api_call_count || 0) + 1,
-        updated_at: now,
-      })
-      return
-    }
-
-    await this.ctx.database.create('memesluna_collection_stats', {
-      collection: collectionName,
-      api_call_count: 1,
-      updated_at: now,
-    })
-  }
 
   async getRandomResource(collectionName: string): Promise<CollectionResource | null> {
     if (!this.isValidCollectionName(collectionName)) {
@@ -1571,11 +1528,7 @@ declare module 'koishi' {
       perceptual_hash: string
       created_at: Date
     }
-    memesluna_collection_stats: {
-      collection: string
-      api_call_count: number
-      updated_at: Date
-    }
+
     memesluna_staged_images: {
       id: string
       filename: string

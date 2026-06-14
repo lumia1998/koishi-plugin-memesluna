@@ -104,8 +104,6 @@ async function applyDynamicForward(
     return { notFound: true }
   }
 
-  await service.incrementCollectionApiCallCount(routeName)
-
   if (resource.type === 'external') {
     return { redirectTo: resource.value }
   }
