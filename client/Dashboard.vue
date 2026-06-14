@@ -184,14 +184,16 @@
                       <button class="danger" @click="confirmDeleteCollection(item.name)">删除表情包</button>
                     </div>
                   </div>
-                  <div class="folder-count">{{ item.totalCount }} 张图片</div>
-                  <div class="folder-meta-row">
-                    <span class="folder-meta-item">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-                      </svg>
-                      本地 {{ item.localCount }} · 外链 {{ item.linkCount }}
-                    </span>
+                  <div class="folder-info-row">
+                    <div class="folder-count">{{ item.totalCount }} 张图片</div>
+                    <div class="folder-meta-row">
+                      <span class="folder-meta-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                        </svg>
+                        本地 {{ item.localCount }} · 外链 {{ item.linkCount }}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2571,15 +2573,22 @@ watch([collectionSearchQuery, collectionFilter], () => {
   color: var(--k-color-danger, #eb5757);
 }
 
-.folder-count {
+.folder-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-top: 9px;
+  gap: 8px;
+}
+
+.folder-count {
   color: var(--k-text-muted, rgba(55, 53, 47, 0.62));
   font-size: 0.86rem;
   line-height: 1.4;
+  white-space: nowrap;
 }
 
 .folder-meta-row {
-  margin-top: 8px;
   display: flex;
   align-items: center;
   min-width: 0;

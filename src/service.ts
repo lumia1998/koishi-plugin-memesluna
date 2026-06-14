@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'crypto'
 import fs from 'fs/promises'
 import path from 'path'
-import { Context, Service } from 'koishi'
+import { Context, Service, Eval } from 'koishi'
 import type { Config } from './config'
 
 const IMAGE_EXTENSIONS = new Set([
@@ -21,23 +21,30 @@ export function hashImageBuffer(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex')
 }
 
+let cachedSharp: any = undefined
+let cachedPhoton: any = undefined
+
 function loadOptionalSharp(): any | null {
+  if (cachedSharp !== undefined) return cachedSharp
   try {
     const packageName = 'sharp'
     const sharpModule = require(packageName)
-    return sharpModule.default || sharpModule
+    cachedSharp = sharpModule.default || sharpModule
   } catch {
-    return null
+    cachedSharp = null
   }
+  return cachedSharp
 }
 
 function loadPhoton(): any | null {
+  if (cachedPhoton !== undefined) return cachedPhoton
   try {
     const packageName = '@cf-wasm/photon/node'
-    return require(packageName)
+    cachedPhoton = require(packageName)
   } catch {
-    return null
+    cachedPhoton = null
   }
+  return cachedPhoton
 }
 
 function countHexBitDistance(a: string, b: string): number {
@@ -262,6 +269,7 @@ export class MemesLunaService extends Service {
       {
         primary: 'id',
         unique: [['collection', 'index']],
+        indexes: ['hash'],
       }
     )
 
@@ -294,6 +302,7 @@ export class MemesLunaService extends Service {
       {
         primary: 'id',
         unique: ['filename'],
+        indexes: ['hash'],
       }
     )
   }
@@ -323,15 +332,23 @@ export class MemesLunaService extends Service {
       return
     }
 
-    for (const colName of folders) {
+    await Promise.all(folders.map(async (colName) => {
       const colDir = this.getCollectionDir(colName)
       let files: string[] = []
       try {
         const entries = await fs.readdir(colDir, { withFileTypes: true })
         files = entries.filter((e) => e.isFile() && this.isImageFile(e.name)).map((e) => e.name)
       } catch {
-        continue
+        return
       }
+
+      // Fetch all registered images for this collection at once
+      const existingImages = await this.ctx.database.get('memesluna_images', { collection: colName })
+      const existingIndices = new Set(existingImages.map((img) => img.index))
+      const existingExternalValues = new Set(
+        existingImages.filter((img) => img.type === 'external').map((img) => img.value)
+      )
+      let maxIndex = existingImages.reduce((max, img) => Math.max(max, img.index), 0)
 
       // Sync local files
       for (const filename of files) {
@@ -341,8 +358,7 @@ export class MemesLunaService extends Service {
 
         // Check if filename is not pure sequential number
         if (isNaN(index) || String(index) !== basename || index < 1 || index > 99999) {
-          const maxImg = await this.ctx.database.get('memesluna_images', { collection: colName }, { limit: 1, sort: { index: 'desc' } })
-          index = maxImg.length ? maxImg[0].index + 1 : 1
+          index = ++maxIndex
           const newFilename = `${index}${ext}`
           const oldPath = path.join(colDir, filename)
           const newPath = path.join(colDir, newFilename)
@@ -359,22 +375,26 @@ export class MemesLunaService extends Service {
               ...(await this.getImageFingerprints(await fs.readFile(newPath))),
               created_at: new Date(),
             })
+            existingIndices.add(index)
           } catch {}
         } else {
           // Check if already registered
-          const existing = await this.ctx.database.get('memesluna_images', { collection: colName, index })
-          if (!existing.length) {
-            await this.ctx.database.create('memesluna_images', {
-              id: randomUUID(),
-              collection: colName,
-              index,
-              filename,
-              type: 'local',
-              value: filename,
-              mime: this.getMimeByFilename(filename),
-              ...(await this.getImageFingerprints(await fs.readFile(path.join(colDir, filename)))),
-              created_at: new Date(),
-            })
+          if (!existingIndices.has(index)) {
+            try {
+              await this.ctx.database.create('memesluna_images', {
+                id: randomUUID(),
+                collection: colName,
+                index,
+                filename,
+                type: 'local',
+                value: filename,
+                mime: this.getMimeByFilename(filename),
+                ...(await this.getImageFingerprints(await fs.readFile(path.join(colDir, filename)))),
+                created_at: new Date(),
+              })
+              existingIndices.add(index)
+              maxIndex = Math.max(maxIndex, index)
+            } catch {}
           }
         }
       }
@@ -389,10 +409,8 @@ export class MemesLunaService extends Service {
           .filter((line) => line.startsWith('http://') || line.startsWith('https://'))
 
         for (const link of links) {
-          const existing = await this.ctx.database.get('memesluna_images', { collection: colName, value: link, type: 'external' })
-          if (!existing.length) {
-            const maxImg = await this.ctx.database.get('memesluna_images', { collection: colName }, { limit: 1, sort: { index: 'desc' } })
-            const index = maxImg.length ? maxImg[0].index + 1 : 1
+          if (!existingExternalValues.has(link)) {
+            const index = ++maxIndex
             await this.ctx.database.create('memesluna_images', {
               id: randomUUID(),
               collection: colName,
@@ -405,12 +423,14 @@ export class MemesLunaService extends Service {
               perceptual_hash: '',
               created_at: new Date(),
             })
+            existingExternalValues.add(link)
+            existingIndices.add(index)
           }
         }
         // Cleanup migrated links file so we don't scan it repeatedly
         await fs.rm(linksFile, { force: true })
       } catch {}
-    }
+    }))
   }
 
   private async ensureStorage() {
@@ -895,12 +915,16 @@ export class MemesLunaService extends Service {
       return 0
     }
 
+    const existingImages = await this.ctx.database.get('memesluna_images', { collection: collectionName })
+    const existingExternalValues = new Set(
+      existingImages.filter((img) => img.type === 'external').map((img) => img.value)
+    )
+    let maxIndex = existingImages.reduce((max, img) => Math.max(max, img.index), 0)
+
     let addedCount = 0
     for (const link of normalized) {
-      const existing = await this.ctx.database.get('memesluna_images', { collection: collectionName, value: link, type: 'external' })
-      if (!existing.length) {
-        const maxImg = await this.ctx.database.get('memesluna_images', { collection: collectionName }, { limit: 1, sort: { index: 'desc' } })
-        const index = maxImg.length ? maxImg[0].index + 1 : 1
+      if (!existingExternalValues.has(link)) {
+        const index = ++maxIndex
         await this.ctx.database.create('memesluna_images', {
           id: randomUUID(),
           collection: collectionName,
@@ -913,6 +937,7 @@ export class MemesLunaService extends Service {
           perceptual_hash: '',
           created_at: new Date(),
         })
+        existingExternalValues.add(link)
         addedCount++
       }
     }
@@ -998,20 +1023,19 @@ export class MemesLunaService extends Service {
     }
   }
 
-  async addLocalImageBase64(
+  async addLocalImageBuffer(
     collectionName: string,
-    base64Data: string,
-    originalName?: string
+    buffer: Buffer,
+    originalName?: string,
+    extHint?: string
   ): Promise<string> {
     this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       throw new Error(`Collection not found: ${collectionName}`)
     }
 
-    const { base64, extHint } = this.normalizeBase64(base64Data)
-    const buffer = Buffer.from(base64, 'base64')
     if (!buffer.length) {
-      throw new Error('Invalid image base64 payload')
+      throw new Error('Invalid image payload')
     }
 
     const fingerprints = await this.getImageFingerprints(buffer)
@@ -1065,6 +1089,16 @@ export class MemesLunaService extends Service {
     }
 
     return finalName
+  }
+
+  async addLocalImageBase64(
+    collectionName: string,
+    base64Data: string,
+    originalName?: string
+  ): Promise<string> {
+    const { base64, extHint } = this.normalizeBase64(base64Data)
+    const buffer = Buffer.from(base64, 'base64')
+    return this.addLocalImageBuffer(collectionName, buffer, originalName, extHint)
   }
 
 
@@ -1171,7 +1205,7 @@ export class MemesLunaService extends Service {
     if (!staged) return null
 
     const originalName = this.isImageFile(row.original_name) ? row.original_name : row.filename
-    const saved = await this.addLocalImageBase64(collectionName, staged.buffer.toString('base64'), originalName)
+    const saved = await this.addLocalImageBuffer(collectionName, staged.buffer, originalName)
     await this.deleteStagedImage(id)
     return saved
   }
@@ -1368,7 +1402,7 @@ export class MemesLunaService extends Service {
       return null
     }
 
-    const count = (await this.ctx.database.get('memesluna_images', { collection: collectionName }, ['id'])).length
+    const count = await this.ctx.database.eval('memesluna_images', (row) => Eval.count(row.id), { collection: collectionName })
     if (count === 0) {
       return null
     }

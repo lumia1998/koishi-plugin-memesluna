@@ -1016,7 +1016,10 @@ export function apply(ctx: Context, config: Config) {
 export * from './config'
 export * from './service'
 
-export const inject = ['database', 'chatluna', 'server']
+export const inject = {
+  required: ['database', 'chatluna', 'server'],
+  optional: ['memesluna'],
+}
 
 
 
