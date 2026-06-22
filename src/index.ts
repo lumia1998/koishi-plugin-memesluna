@@ -422,6 +422,10 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
   consoleService.addListener('memesluna/getBaseUrl', async () => {
     return `${toAbsoluteBaseUrl(ctx, config)}${config.backendPath}`
   })
+
+  consoleService.addListener('memesluna/deleteAllStagedImages', withReady(async () => {
+    return await service.deleteAllStagedImages()
+  }))
 }
 
 
@@ -488,6 +492,26 @@ function applyAutoCollect(ctx: Context, config: Config) {
   ctx.setInterval(() => cleanupAutoCollectFrequency(windowMs), Math.max(60 * 1000, windowMs))
   ctx.logger('memesluna').info(`Auto collect started: ${windowMinutes}m/${threshold} times, ${config.minEmojiSize || 50}KB-${config.maxEmojiSize || 15}MB, ${dailyLimit}/day/group`)
 }
+
+function applyStagingCleanup(ctx: Context, config: Config) {
+  const retentionDays = config.stagingRetentionDays || 0
+  if (retentionDays <= 0) return
+
+  const cleanupIntervalMs = Math.max(60 * 60 * 1000, retentionDays * 24 * 60 * 60 * 1000 / 4)
+  ctx.setInterval(async () => {
+    try {
+      const service = ctx.memesluna
+      await service.ready
+      const deleted = await service.deleteExpiredStagedImages(retentionDays)
+      if (deleted > 0) {
+        ctx.logger('memesluna').info(`Staging cleanup: removed ${deleted} expired images (retention: ${retentionDays} days)`)
+      }
+    } catch (error) {
+      ctx.logger('memesluna').debug(`Staging cleanup failed: ${(error as Error).message}`)
+    }
+  }, cleanupIntervalMs)
+  ctx.logger('memesluna').info(`Staging auto-clean enabled: retention ${retentionDays} days`)
+}
 function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
   if (!ctx.server) return
 
@@ -513,9 +537,7 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
   })
 
     ctx.server.get(`${basePath}/api/admin/state`, async (koa) => {
-      const state = await buildAdminState(service)
-      console.log('Admin State:', JSON.stringify(state, null, 2))
-      koa.body = state
+      koa.body = await buildAdminState(service)
     })
 
   ctx.server.post(`${basePath}/api/admin/collections`, async (koa) => {
@@ -593,6 +615,11 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     )
 
     koa.body = { ok: true, staged }
+  })
+
+  ctx.server.delete(`${basePath}/api/admin/staged-images`, async (koa) => {
+    const deleted = await service.deleteAllStagedImages()
+    koa.body = { ok: true, deleted }
   })
 
   ctx.server.patch(`${basePath}/api/admin/collections/:name/description`, async (koa) => {
@@ -883,6 +910,7 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
 export function apply(ctx: Context, config: Config) {
   ctx.plugin(MemesLunaService, config)
   applyAutoCollect(ctx, config)
+  applyStagingCleanup(ctx, config)
 
   ctx.inject(['memesluna', 'server'], async (ctx) => {
     const service = ctx.memesluna

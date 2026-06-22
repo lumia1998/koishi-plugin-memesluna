@@ -15,6 +15,7 @@ export interface Config {
   maxEmojiSize: number
   groupAutoCollectLimit: number
   similarityThreshold: number
+  stagingRetentionDays: number
 }
 
 export const Config: Schema<Config> = Schema.intersect([
@@ -86,6 +87,11 @@ export const Config: Schema<Config> = Schema.intersect([
       .role('slider')
       .default(0.9)
       .description('暂缓区相似图片筛选阈值，只用于聚类展示，不会自动删除图片'),
+    stagingRetentionDays: Schema.number()
+      .min(0)
+      .max(365)
+      .default(0)
+      .description('暂缓区图片自动清理天数，0 表示永不自动清理'),
   }).description('暂缓区复核配置'),
 ]) as Schema<Config>
 

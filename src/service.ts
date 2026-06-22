@@ -1194,6 +1194,39 @@ export class MemesLunaService extends Service {
     return true
   }
 
+  async deleteExpiredStagedImages(retentionDays: number): Promise<number> {
+    if (retentionDays <= 0) return 0
+    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000)
+    const rows = await this.ctx.database.get('memesluna_staged_images', {})
+    const expired = rows.filter((row) => new Date(row.created_at).getTime() < cutoff.getTime())
+    if (!expired.length) return 0
+
+    for (const row of expired) {
+      try {
+        await fs.unlink(this.resolveStagedImagePath((row as MemesLunaStagedImageRow).filename))
+      } catch {}
+    }
+
+    const ids = expired.map((row) => row.id)
+    await this.ctx.database.remove('memesluna_staged_images', { id: ids })
+    return ids.length
+  }
+
+  async deleteAllStagedImages(): Promise<number> {
+    const rows = await this.ctx.database.get('memesluna_staged_images', {})
+    if (!rows.length) return 0
+
+    for (const row of rows) {
+      try {
+        await fs.unlink(this.resolveStagedImagePath((row as MemesLunaStagedImageRow).filename))
+      } catch {}
+    }
+
+    const ids = rows.map((row) => row.id)
+    await this.ctx.database.remove('memesluna_staged_images', { id: ids })
+    return ids.length
+  }
+
   async promoteStagedImage(id: string, collectionName: string): Promise<string | null> {
     this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {

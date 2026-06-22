@@ -740,6 +740,13 @@
               <button @click="refreshStagedImages" class="btn btn-secondary btn-notion">
                 刷新列表
               </button>
+              <button
+                v-if="stagedImages.length"
+                @click="confirmDeleteAllStagedImages"
+                class="btn btn-danger btn-notion"
+              >
+                一键清空
+              </button>
             </div>
           </div>
 
@@ -834,57 +841,86 @@
             没有匹配当前搜索条件的暂缓图片
           </div>
 
-          <div v-else class="staging-grid">
-            <article v-for="item in filteredStagedImages" :key="item.id" class="staging-card">
-              <button class="staging-image-shell" @click="openImage(getStagedImageUrl(item.id))" title="打开原图">
-                <img
-                  class="staging-image"
-                  :src="getStagedImageUrl(item.id)"
-                  :alt="item.originalName || item.filename"
-                  loading="lazy"
-                />
-              </button>
-
-              <div class="staging-card-body">
-                <div class="staging-title-row">
-                  <div class="staging-title" :title="item.originalName || item.filename">
-                    {{ item.originalName || item.filename }}
-                  </div>
-                  <span class="staging-ext-tag">{{ getImageExtension(item.filename) }}</span>
-                </div>
-
-                <div class="staging-meta-grid">
-                  <span :title="item.reason || '暂缓候选'">{{ item.reason || '暂缓候选' }}</span>
-                  <span>{{ item.source || 'filter' }}</span>
-                  <span>{{ formatSize(item.size) }}</span>
-                  <span>{{ formatDate(item.createdAt) }}</span>
-                </div>
-
-                <select v-model="stagingTargetCollection[item.id]" class="flat-select staging-select" :disabled="!collections.length">
-                  <option value="">选择目标表情包</option>
-                  <option v-for="collection in collections" :key="collection.name" :value="collection.name">
-                    {{ collection.name }}
-                  </option>
-                </select>
-
-                <div class="staging-actions">
-                  <button
-                    @click="promoteStagedImage(item)"
-                    class="btn btn-primary staging-action-btn"
-                    :disabled="stagingBusyId === item.id || !stagingTargetCollection[item.id]"
-                  >
-                    {{ stagingBusyId === item.id ? '处理中...' : '归档到表情包' }}
-                  </button>
-                  <button
-                    @click="deleteStagedImage(item)"
-                    class="btn btn-danger staging-action-btn"
-                    :disabled="stagingBusyId === item.id"
-                  >
-                    删除
-                  </button>
-                </div>
+          <div v-else>
+            <div v-if="selectedStagedIds.size" class="staging-batch-toolbar">
+              <div class="bulk-status">
+                <span class="bulk-title">暂缓区</span>
+                <span class="bulk-meta">已选择 {{ selectedStagedIds.size }} 张</span>
               </div>
-            </article>
+              <div class="bulk-actions">
+                <button @click="toggleSelectAllStaged" class="toolbar-btn compact">
+                  {{ areAllCurrentPageStagedSelected ? '取消全选' : '全选当前' }}
+                </button>
+                <button @click="clearSelectedStaged" class="toolbar-btn compact">
+                  清空选择
+                </button>
+                <button @click="batchDeleteStagedImages" class="toolbar-btn compact danger">
+                  批量删除
+                </button>
+              </div>
+            </div>
+
+            <div class="staging-grid">
+              <article v-for="item in filteredStagedImages" :key="item.id" class="staging-card" :class="{ 'staging-card-selected': isStagedSelected(item.id) }">
+                <button
+                  class="staging-select-toggle"
+                  @click.stop="toggleStagedSelection(item.id)"
+                  :title="isStagedSelected(item.id) ? '取消选择' : '选择图片'"
+                >
+                  <svg v-if="isStagedSelected(item.id)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                </button>
+                <button class="staging-image-shell" @click="openImage(getStagedImageUrl(item.id))" title="打开原图">
+                  <img
+                    class="staging-image"
+                    :src="getStagedImageUrl(item.id)"
+                    :alt="item.originalName || item.filename"
+                    loading="lazy"
+                  />
+                </button>
+
+                <div class="staging-card-body">
+                  <div class="staging-title-row">
+                    <div class="staging-title" :title="item.originalName || item.filename">
+                      {{ item.originalName || item.filename }}
+                    </div>
+                    <span class="staging-ext-tag">{{ getImageExtension(item.filename) }}</span>
+                  </div>
+
+                  <div class="staging-meta-grid">
+                    <span :title="item.reason || '暂缓候选'">{{ item.reason || '暂缓候选' }}</span>
+                    <span>{{ item.source || 'filter' }}</span>
+                    <span>{{ formatSize(item.size) }}</span>
+                    <span>{{ formatDate(item.createdAt) }}</span>
+                  </div>
+
+                  <select v-model="stagingTargetCollection[item.id]" class="flat-select staging-select" :disabled="!collections.length">
+                    <option value="">选择目标表情包</option>
+                    <option v-for="collection in collections" :key="collection.name" :value="collection.name">
+                      {{ collection.name }}
+                    </option>
+                  </select>
+
+                  <div class="staging-actions">
+                    <button
+                      @click="promoteStagedImage(item)"
+                      class="btn btn-primary staging-action-btn"
+                      :disabled="stagingBusyId === item.id || !stagingTargetCollection[item.id]"
+                    >
+                      {{ stagingBusyId === item.id ? '处理中...' : '归档到表情包' }}
+                    </button>
+                    <button
+                      @click="deleteStagedImage(item)"
+                      class="btn btn-danger staging-action-btn"
+                      :disabled="stagingBusyId === item.id"
+                    >
+                      删除
+                    </button>
+                  </div>
+                </div>
+              </article>
+            </div>
           </div>
         </div>
         <!-- MENU VIEW 4: PREVIEW (👁️ 预览) -->
@@ -1086,6 +1122,7 @@ const stagingViewMode = ref<'all' | 'similar'>('all')
 const similarGroups = ref<SimilarStagedImageGroup[]>([])
 const similarLoading = ref(false)
 const similarMessage = ref('')
+const selectedStagedIds = ref<Set<string>>(new Set())
 
 // Endpoint Forms reactivity
 const showEndpointEditor = ref(false)
@@ -1309,6 +1346,77 @@ const similarStagedImages = computed(() => {
   return Array.from(map.values())
 })
 
+const selectedStagedImages = computed(() => Array.from(selectedStagedIds.value))
+const areAllCurrentPageStagedSelected = computed(() => {
+  const items = filteredStagedImages.value
+  return items.length > 0 && items.every((item) => selectedStagedIds.value.has(item.id))
+})
+
+function isStagedSelected(id: string): boolean {
+  return selectedStagedIds.value.has(id)
+}
+
+function toggleStagedSelection(id: string) {
+  const next = new Set(selectedStagedIds.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  selectedStagedIds.value = next
+}
+
+function toggleSelectAllStaged() {
+  const next = new Set(selectedStagedIds.value)
+  if (areAllCurrentPageStagedSelected.value) {
+    filteredStagedImages.value.forEach((item) => next.delete(item.id))
+  } else {
+    filteredStagedImages.value.forEach((item) => next.add(item.id))
+  }
+  selectedStagedIds.value = next
+}
+
+function clearSelectedStaged() {
+  selectedStagedIds.value = new Set()
+}
+
+async function batchDeleteStagedImages() {
+  const ids = selectedStagedImages.value
+  if (!ids.length) return
+  if (!confirm(`确认永久删除已选择的 ${ids.length} 张暂缓图片吗？此操作无法恢复！`)) return
+
+  try {
+    loading.value = true
+    await Promise.all(ids.map((id) => send('memesluna/deleteStagedImage', id)))
+    showToast(`已删除 ${ids.length} 张暂缓图片`, 'success')
+    clearSelectedStaged()
+    await refreshStagedImages()
+    await fetchState()
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '批量删除暂缓图片失败', 'error')
+  } finally {
+    loading.value = false
+  }
+}
+
+async function confirmDeleteAllStagedImages() {
+  if (!stagedImages.value.length) return
+  if (!confirm(`⚠️ 危险操作：确认永久删除暂缓区全部 ${stagedImages.value.length} 张图片吗？此操作不可逆！`)) return
+
+  try {
+    loading.value = true
+    const deleted = await send('memesluna/deleteAllStagedImages')
+    showToast(`已清空暂缓区，共删除 ${deleted} 张图片`, 'success')
+    clearSelectedStaged()
+    await refreshStagedImages()
+    await fetchState()
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '清空暂缓区失败', 'error')
+  } finally {
+    loading.value = false
+  }
+}
+
 // Settings preview values from backend
 const routeInventoryText = ref('')
 const llmPromptPreview = ref('')
@@ -1343,6 +1451,8 @@ function switchMainMenu(menu: 'resources' | 'distribution' | 'staging' | 'settin
   }
   if (menu === 'staging') {
     refreshStagedImages()
+  } else {
+    clearSelectedStaged()
   }
 }
 
@@ -2027,9 +2137,7 @@ async function deleteSelectedImages() {
 
   try {
     loading.value = true
-    for (const filename of names) {
-      await send('memesluna/deleteLocalImage', currentCollection.value.name, filename)
-    }
+    await Promise.all(names.map((filename) => send('memesluna/deleteLocalImage', currentCollection.value!.name, filename)))
     showToast(`已删除 ${names.length} 张本地图片`, 'success')
     clearSelectedImages()
     await loadCollectionResources(currentCollection.value.name)
@@ -2071,9 +2179,7 @@ async function moveSelectedImages() {
   const names = selectedImages.value
   try {
     loading.value = true
-    for (const filename of names) {
-      await send('memesluna/moveLocalImage', source, target, filename)
-    }
+    await Promise.all(names.map((filename) => send('memesluna/moveLocalImage', source, target, filename)))
     showToast(`已将 ${names.length} 张素材移动至表情包 "${target}"`, 'success')
     clearSelectedImages()
     await loadCollectionResources(source)
@@ -3963,12 +4069,58 @@ watch([collectionSearchQuery, collectionFilter], () => {
 }
 
 .staging-card {
+  position: relative;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.09));
   border-radius: 8px;
   background-color: var(--k-bg-card, #ffffff);
   box-shadow: none;
+}
+
+.staging-card-selected {
+  border-color: var(--k-color-primary, #2383e2);
+  box-shadow: 0 0 0 2px var(--memesluna-focus-ring);
+}
+
+.staging-select-toggle {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 5;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  background-color: rgba(255, 255, 255, 0.85);
+  color: var(--k-color-primary, #2383e2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 0.15s ease;
+}
+
+.staging-select-toggle:hover {
+  background-color: rgba(255, 255, 255, 0.95);
+}
+
+.staging-select-toggle svg {
+  width: 14px;
+  height: 14px;
+}
+
+.staging-batch-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.09));
+  border-radius: 8px;
+  background-color: var(--memesluna-floating-action-bg, rgba(255, 255, 255, 0.92));
 }
 
 .staging-image-shell {
