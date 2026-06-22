@@ -208,6 +208,13 @@ function hitDailyAutoCollectLimit(groupId: string, limit: number): boolean {
   return false
 }
 
+function isDailyAutoCollectLimitReached(groupId: string, limit: number): boolean {
+  const day = getDailyKey()
+  const current = autoCollectDailyLimits.get(groupId)
+  if (!current || current.day !== day) return false
+  return current.count >= limit
+}
+
 function trackImageFrequency(hash: string, groupId: string, windowMs: number): { count: number; alreadyStaged: boolean } {
   const now = Date.now()
   const key = `${groupId}:${hash}`
@@ -448,6 +455,8 @@ function applyAutoCollect(ctx: Context, config: Config) {
     if (!groupId) return
     if (whitelist.size && !whitelist.has(groupId)) return
 
+    if (isDailyAutoCollectLimitReached(groupId, dailyLimit)) return
+
     const imageUrls = getMessageImages(session)
     if (!imageUrls.length) return
 
@@ -666,18 +675,22 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
       return
     }
 
-    const uploaded: string[] = []
-    for (const item of items) {
-      const base64 = toTrimmedString(item.base64)
-      const originalName = toTrimmedString(item.originalName)
-      if (!base64) continue
-      const saved = await service.addLocalImageBase64(collectionName, base64, originalName || undefined)
-      uploaded.push(saved)
-    }
+    try {
+      const imagesToUpload = items
+        .map((item) => ({
+          base64Data: toTrimmedString(item.base64),
+          originalName: toTrimmedString(item.originalName) || undefined,
+        }))
+        .filter((img) => img.base64Data)
 
-    koa.body = {
-      ok: true,
-      uploaded,
+      const uploaded = await service.addLocalImagesBase64(collectionName, imagesToUpload)
+      koa.body = {
+        ok: true,
+        uploaded,
+      }
+    } catch (error) {
+      koa.status = 400
+      koa.body = { error: (error as Error).message || 'Failed to upload images' }
     }
   })
 
@@ -1019,8 +1032,7 @@ export function apply(ctx: Context, config: Config) {
           return '图片格式不兼容，仅支持 JPG/PNG/GIF/WEBP/BMP 格式图片（已拒绝 AVIF，且不会放入暂缓区）'
         }
 
-        const base64 = buffer.toString('base64')
-        const filename = await service.addLocalImageBase64(name, base64, `stole${ext}`)
+        const filename = await service.addLocalImageBuffer(name, buffer, `stole${ext}`)
         savedFilenames.push(filename)
         successCount++
       } catch (err) {

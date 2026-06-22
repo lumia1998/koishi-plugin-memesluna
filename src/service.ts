@@ -365,7 +365,6 @@ export class MemesLunaService extends Service {
         // Check if already registered
         if (!existingFilenames.has(currentName)) {
           const index = ++maxIndex
-          const fullPath = path.join(colDir, currentName)
           try {
             await this.ctx.database.create('memesluna_images', {
               id: randomUUID(),
@@ -375,7 +374,8 @@ export class MemesLunaService extends Service {
               type: 'local',
               value: currentName,
               mime: this.getMimeByFilename(currentName),
-              ...(await this.getImageFingerprints(await fs.readFile(fullPath))),
+              hash: '',
+              perceptual_hash: '',
               created_at: new Date(),
             })
             existingFilenames.add(currentName)
@@ -421,7 +421,9 @@ export class MemesLunaService extends Service {
     await fs.mkdir(this.getStorageRoot(), { recursive: true })
     await fs.mkdir(this.getStagingDir(), { recursive: true })
     await this.syncExistingFilesToDatabase()
-    await this.backfillImageFingerprints()
+    this.backfillImageFingerprints().catch((err) => {
+      this.ctx.logger('memesluna').warn('Failed to backfill image fingerprints in background:', err)
+    })
   }
 
   private async getImagePerceptualHash(buffer: Buffer): Promise<string> {
@@ -1101,6 +1103,96 @@ export class MemesLunaService extends Service {
     const { base64, extHint } = this.normalizeBase64(base64Data)
     const buffer = Buffer.from(base64, 'base64')
     return this.addLocalImageBuffer(collectionName, buffer, originalName, extHint)
+  }
+
+  async addLocalImagesBase64(
+    collectionName: string,
+    images: Array<{ base64Data: string; originalName?: string }>
+  ): Promise<string[]> {
+    this.ensureCollectionName(collectionName)
+    if (!(await this.collectionExists(collectionName))) {
+      throw new Error(`Collection not found: ${collectionName}`)
+    }
+
+    const maxImg = await this.ctx.database.get('memesluna_images', { collection: collectionName }, { limit: 1, sort: { index: 'desc' } })
+    let nextIndex = maxImg.length ? maxImg[0].index + 1 : 1
+
+    const backend = this.getStorageBackend()
+    const results: string[] = []
+
+    // Parse base64 and run in parallel to load files and get fingerprints
+    const processPromises = images.map(async (img) => {
+      const { base64, extHint } = this.normalizeBase64(img.base64Data)
+      const buffer = Buffer.from(base64, 'base64')
+      if (!buffer.length) {
+        throw new Error('Invalid image payload')
+      }
+
+      const fingerprints = await this.getImageFingerprints(buffer)
+      const duplicate = await this.getDuplicateImageByHash(fingerprints.hash, { includeStaged: false, includeImages: true })
+      if (duplicate) {
+        throw new Error('Duplicate image already exists: ' + duplicate)
+      }
+
+      const rawExt = (path.parse(img.originalName ?? '').ext || (extHint ? `.${extHint}` : '') || '.png').toLowerCase()
+      const finalExt = rawExt === '.jpeg' ? '.jpg' : rawExt
+      if (!IMAGE_EXTENSIONS.has(finalExt)) {
+        throw new Error('Unsupported image format')
+      }
+
+      const baseName = img.originalName ? path.basename(img.originalName, path.extname(img.originalName)) : `image-${Date.now()}`
+      const safeBase = sanitizeFilename(`${baseName}${finalExt}`)
+
+      return {
+        buffer,
+        fingerprints,
+        safeBase,
+      }
+    })
+
+    const processed = await Promise.all(processPromises)
+
+    // Write files and insert into database
+    const databaseRows: any[] = []
+    for (const p of processed) {
+      const index = nextIndex++
+      const finalName = await this.deduplicateDatabaseFilename(collectionName, p.safeBase)
+
+      if (backend) {
+        const result = await backend.upload(p.buffer, finalName)
+        databaseRows.push({
+          id: randomUUID(),
+          collection: collectionName,
+          index,
+          filename: finalName,
+          type: 'storage',
+          value: result.key,
+          public_url: result.publicUrl || '',
+          mime: this.getMimeByFilename(finalName),
+          ...p.fingerprints,
+          created_at: new Date(),
+        })
+      } else {
+        const dir = this.getCollectionDir(collectionName)
+        await fs.writeFile(path.join(dir, finalName), p.buffer)
+        databaseRows.push({
+          id: randomUUID(),
+          collection: collectionName,
+          index,
+          filename: finalName,
+          type: 'local',
+          value: finalName,
+          mime: this.getMimeByFilename(finalName),
+          ...p.fingerprints,
+          created_at: new Date(),
+        })
+      }
+      results.push(finalName)
+    }
+
+    // Insert database rows in parallel
+    await Promise.all(databaseRows.map((row) => this.ctx.database.create('memesluna_images', row)))
+    return results
   }
 
 
