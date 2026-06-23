@@ -93,7 +93,7 @@
         <div v-if="activeMenu === 'resources'" class="resources-router-view">
           
           <!-- Collection Lists (Folder view) -->
-          <div v-if="!currentCollection" class="collections-folder-view">
+          <div v-if="!currentCollection && !currentTagView" class="collections-folder-view">
             <!-- Creator bar in Notion Style -->
             <div class="notion-db-header page-section-header collection-list-header">
               <div>
@@ -101,6 +101,28 @@
                 <p class="section-desc compact">管理表情包合集与图片素材</p>
               </div>
               <div class="notion-db-actions collection-toolbar">
+                <!-- View toggle: collection / tag -->
+                <div class="view-toggle-pill" title="切换合集视图/标签视图">
+                  <button
+                    :class="['pill-btn', activeResourceView === 'collection' ? 'active' : '']"
+                    @click="activeResourceView = 'collection'"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                    合集
+                  </button>
+                  <button
+                    :class="['pill-btn', activeResourceView === 'tag' ? 'active' : '']"
+                    @click="switchToTagView"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+                      <path d="M7 7h.01"></path>
+                    </svg>
+                    标签
+                  </button>
+                </div>
                 <div class="collection-search-shell">
                   <svg class="collection-toolbar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="11" cy="11" r="8"></circle>
@@ -131,19 +153,19 @@
             <hr class="notion-hr" />
 
             <!-- Folders grid layout -->
-            <div v-if="!collections.length" class="empty-placeholder-card">
+            <div v-if="!collections.length" v-show="activeResourceView === 'collection'" class="empty-placeholder-card">
               <div class="empty-icon">📁</div>
               <h3>尚未创建任何表情包</h3>
               <p>点击右上角按钮即可快速创建一个新的表情包合集。</p>
             </div>
 
-            <div v-else-if="!filteredCollections.length" class="empty-placeholder-card">
+            <div v-else-if="!filteredCollections.length" v-show="activeResourceView === 'collection'" class="empty-placeholder-card">
               <div class="empty-icon">🔎</div>
               <h3>没有匹配的表情包合集</h3>
               <p>换个关键词或筛选条件再试试。</p>
             </div>
 
-            <div v-else class="folders-grid">
+            <div v-show="activeResourceView === 'collection'" v-else class="folders-grid">
               <div
                 v-for="item in filteredCollections"
                 :key="item.name"
@@ -198,11 +220,109 @@
                 </div>
               </div>
             </div>
+
+            <!-- Tag View (alternative to collection grid) -->
+            <div v-if="activeResourceView === 'tag'" class="tag-view-section">
+              <div v-if="tagSummaryLoading" class="loading-container">
+                <div class="spinner"></div>
+                <p>加载标签数据...</p>
+              </div>
+              <div v-else-if="!tagSummary.length" class="empty-placeholder-card">
+                <div class="empty-icon">🏷️</div>
+                <h3>暂无标签</h3>
+                <p>开启 AI 标注后，上传图片时会自动生成标签，也可以手动为图片添加标签。</p>
+              </div>
+              <div v-else class="folders-grid">
+                <div
+                  v-for="item in tagSummary"
+                  :key="item.tag"
+                  class="folder-card"
+                  @click="filterByTag(item.tag)"
+                >
+                  <div class="folder-cover preview-count-4">
+                    <template v-if="item.previewUrls.length">
+                      <img
+                        v-for="(src, idx) in item.previewUrls.slice(0, 4)"
+                        :key="idx"
+                        :src="src"
+                        class="folder-cover-img"
+                        loading="lazy"
+                      />
+                    </template>
+                    <div v-else class="folder-cover-empty">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+                        <path d="M7 7h.01"></path>
+                      </svg>
+                    </div>
+                  </div>
+                  <div class="folder-body">
+                    <div class="folder-title-row">
+                      <div class="folder-name">{{ item.tag }}</div>
+                    </div>
+                    <div class="folder-info-row">
+                      <div class="folder-count">{{ item.count }} 张图片</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tag Detail View (cross-collection images by tag) -->
+          <div v-if="currentTagView" class="tag-detail-view">
+            <div class="detail-topbar">
+              <div class="detail-breadcrumbs">
+                <button @click="exitTagView" class="detail-back-btn" title="返回标签列表">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="m15 18-6-6 6-6"></path>
+                  </svg>
+                  返回标签列表
+                </button>
+                <span class="detail-separator">/</span>
+                <span class="detail-crumb-current">#{{ currentTagView }}</span>
+                <span class="detail-separator">/</span>
+                <span class="detail-crumb-strong">{{ currentTagImages.length }} 张图片</span>
+              </div>
+            </div>
+
+            <div v-if="tagImagesLoading" class="loading-container">
+              <div class="spinner"></div>
+              <p>加载图片...</p>
+            </div>
+
+            <div v-else-if="!currentTagImages.length" class="empty-placeholder-card">
+              <div class="empty-icon">🏷️</div>
+              <h3>没有找到带此标签的图片</h3>
+            </div>
+
+            <div v-else class="tag-images-grid notion-gallery-grid">
+              <div
+                v-for="item in currentTagImages"
+                :key="item.collection + '/' + item.filename"
+                class="notion-gallery-card"
+              >
+                <div class="gallery-img-container">
+                  <img :src="item.imageUrl" class="gallery-img" loading="lazy" />
+                </div>
+                <div class="gallery-card-footer">
+                  <div class="gallery-card-collection" :title="item.collection">{{ item.collection }}</div>
+                  <div class="gallery-card-tags">
+                    <span
+                      v-for="tag in item.tags"
+                      :key="tag"
+                      :class="['mini-tag', tag === currentTagView ? 'active-tag' : '']"
+                      @click.stop="filterByTag(tag)"
+                    >{{ tag }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Collection Details (Inside details view) -->
-          <div 
-            v-else 
+          <div
+            v-else-if="currentCollection"
             class="collection-detail-layout"
             @dragover.prevent="dragOver = true"
           >
@@ -357,6 +477,48 @@
                 </div>
               </div>
 
+              <!-- Tag Editor Dialog -->
+              <div v-if="tagEditorVisible" class="tag-editor-overlay" @click.self="closeTagEditor">
+                <div class="tag-editor-dialog">
+                  <div class="tag-editor-header">
+                    <div>
+                      <div class="tag-editor-title">编辑标签</div>
+                      <div class="tag-editor-subtitle">{{ tagEditorCollection }} / {{ tagEditorImage }}</div>
+                    </div>
+                    <button @click="closeTagEditor" class="icon-btn hover-bg">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                        <path d="M18 6 6 18"></path><path d="m6 6 12 12"></path>
+                      </svg>
+                    </button>
+                  </div>
+                  <div class="tag-editor-body">
+                    <div class="tag-editor-list">
+                      <span
+                        v-for="tag in tagEditorTags"
+                        :key="tag"
+                        class="tag-editor-tag"
+                      >
+                        {{ tag }}
+                        <button @click="removeTagFromEditor(tag)" class="tag-remove-btn" :disabled="tagEditorSaving">×</button>
+                      </span>
+                      <span v-if="!tagEditorTags.length" class="tag-editor-empty">暂无标签</span>
+                    </div>
+                    <div class="tag-editor-input-row">
+                      <input
+                        v-model="tagEditorInput"
+                        class="flat-input tag-editor-input"
+                        placeholder="输入标签名，回车添加"
+                        @keyup.enter="addTagFromEditor"
+                        :disabled="tagEditorSaving"
+                      />
+                      <button @click="addTagFromEditor" class="asset-btn primary" :disabled="!tagEditorInput.trim() || tagEditorSaving">
+                        {{ tagEditorSaving ? '保存中...' : '添加' }}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <section class="asset-gallery-section">
                 <div class="asset-gallery-toolbar">
                   <div class="asset-tabs">
@@ -485,58 +647,39 @@
                         class="gallery-img"
                         loading="lazy"
                       />
+                      <!-- Tags at top-right of image -->
+                      <div v-if="item.type === 'local'" class="image-tag-corner">
+                        <span
+                          v-for="tag in getImageTags(item.value).slice(0, 5)"
+                          :key="tag"
+                          class="image-tag-badge"
+                          :style="{ backgroundColor: tagColor(tag) }"
+                        >{{ tag }}</span>
+                        <span v-if="getImageTags(item.value).length > 5" class="image-tag-badge more">+{{ getImageTags(item.value).length - 5 }}</span>
+                      </div>
                       <span class="image-format-badge" :class="item.type">{{ item.type === 'external' ? 'LINK' : getImageExtension(item.value) }}</span>
                     </div>
                     <div class="gallery-list-meta">
                       <div>{{ item.label }}</div>
-                      <span>{{ item.type === 'external' ? '外链图片' : getImageExtension(item.value) }}</span>
                     </div>
-
-                    <div class="gallery-card-overlay">
-                      <div v-if="item.type === 'local'" class="overlay-actions">
-                        <div 
-                          class="card-action-btn move move-dropdown-container"
-                          @click.stop="toggleMoveDropdown(item.value)"
-                        >
-                          <span>修改</span>
-                          <div 
-                            class="move-dropdown-menu"
-                            v-show="activeMoveDropdown === item.value"
-                          >
-                            <template v-for="targetCol in collections">
-                              <button 
-                                v-if="targetCol.name !== currentCollection.name"
-                                :key="targetCol.name"
-                                @click.stop="moveImage(currentCollection.name, targetCol.name, item.value)"
-                                class="dropdown-item"
-                              >
-                                {{ targetCol.name }}
-                              </button>
-                            </template>
-                          </div>
+                    <div v-if="item.type === 'local'" class="gallery-card-actions">
+                      <button @click.stop="openTagEditor(currentCollection.name, item.value)" class="card-action-btn">标签</button>
+                      <button @click.stop="toggleMoveDropdown(item.value)" class="card-action-btn move-dropdown-trigger">
+                        修改
+                        <div class="move-dropdown-menu-sm" v-show="activeMoveDropdown === item.value">
+                          <template v-for="targetCol in collections">
+                            <button v-if="targetCol.name !== currentCollection.name" :key="targetCol.name"
+                              @click.stop="moveImage(currentCollection.name, targetCol.name, item.value)" class="dropdown-item">
+                              → {{ targetCol.name }}
+                            </button>
+                          </template>
                         </div>
-                        
-                        <button
-                          @click.stop="confirmDeleteImage(currentCollection.name, item.value)"
-                          class="card-action-btn danger"
-                        >
-                          删除
-                        </button>
-                      </div>
-                      <div v-else class="overlay-actions">
-                        <button
-                          @click.stop="copyToClipboard(item.value)"
-                          class="card-action-btn"
-                        >
-                          复制
-                        </button>
-                        <button
-                          @click.stop="deleteExternalLink(currentCollection.name, item.value)"
-                          class="card-action-btn danger"
-                        >
-                          删除
-                        </button>
-                      </div>
+                      </button>
+                      <button @click.stop="confirmDeleteImage(currentCollection.name, item.value)" class="card-action-btn danger">删除</button>
+                    </div>
+                    <div v-else class="gallery-card-actions">
+                      <button @click.stop="copyToClipboard(item.value)" class="card-action-btn">复制</button>
+                      <button @click.stop="deleteExternalLink(currentCollection.name, item.value)" class="card-action-btn danger">删除</button>
                     </div>
                   </div>
                 </div>
@@ -1107,6 +1250,50 @@ interface PreviewRouteRow {
 
 // Navigation states
 const activeMenu = ref<'resources' | 'distribution' | 'staging' | 'settings'>('resources')
+const activeResourceView = ref<'collection' | 'tag'>('collection')
+
+// Tag summary data
+const tagSummary = ref<{ tag: string; count: number; previewUrls: string[] }[]>([])
+const tagSummaryLoading = ref(false)
+
+async function switchToTagView() {
+  activeResourceView.value = 'tag'
+  if (tagSummary.value.length) return
+  tagSummaryLoading.value = true
+  try {
+    const result = await send('memesluna/getTagSummary')
+    tagSummary.value = Array.isArray(result) ? result : []
+  } catch (err) {
+    console.error('Failed to load tag summary:', err)
+    tagSummary.value = []
+  } finally {
+    tagSummaryLoading.value = false
+  }
+}
+
+// Tag detail view
+const currentTagView = ref('')
+const currentTagImages = ref<{ collection: string; filename: string; tags: string[]; imageUrl: string }[]>([])
+const tagImagesLoading = ref(false)
+
+async function filterByTag(tag: string) {
+  currentTagView.value = tag
+  tagImagesLoading.value = true
+  try {
+    const result = await send('memesluna/getImagesByTag', tag)
+    currentTagImages.value = Array.isArray(result?.images) ? result.images : []
+  } catch (err) {
+    console.error('Failed to load tag images:', err)
+    currentTagImages.value = []
+  } finally {
+    tagImagesLoading.value = false
+  }
+}
+
+function exitTagView() {
+  currentTagView.value = ''
+  currentTagImages.value = []
+}
 const loading = ref(true)
 
 // Core state data
@@ -1158,6 +1345,95 @@ const galleryFilter = ref<'all' | 'selected'>('all')
 const galleryViewMode = ref<'grid' | 'list'>('grid')
 const apiPreviewUrl = ref('')
 const apiPreviewLoading = ref(false)
+
+// Tag editor state
+const tagEditorVisible = ref(false)
+const tagEditorImage = ref('')
+const tagEditorCollection = ref('')
+const tagEditorTags = ref<string[]>([])
+const tagEditorInput = ref('')
+const tagEditorSaving = ref(false)
+const imageTagsCache = ref<Record<string, string[]>>({})
+
+function getImageCacheKey(collection: string, filename: string): string {
+  return `${collection}/${filename}`
+}
+
+function getImageTags(filename: string): string[] {
+  if (!currentCollection.value) return []
+  return imageTagsCache.value[getImageCacheKey(currentCollection.value.name, filename)] || []
+}
+
+async function loadImageTagsBatch(collection: string, filenames: string[]) {
+  const results = await Promise.allSettled(
+    filenames.map((fn) => send('memesluna/getImageMetadata', collection, fn))
+  )
+  for (let i = 0; i < filenames.length; i++) {
+    const result = results[i]
+    if (result.status === 'fulfilled' && result.value?.ok) {
+      const key = getImageCacheKey(collection, filenames[i])
+      imageTagsCache.value[key] = result.value.tags || []
+    }
+  }
+}
+
+const TAG_PALETTE = ['#f97316','#ec4899','#8b5cf6','#06b6d4','#22c55e','#eab308','#f43f5e','#14b8a6','#a855f7','#3b82f6']
+
+function tagColor(tag: string): string {
+  let hash = 0
+  for (let i = 0; i < tag.length; i++) hash = ((hash << 5) - hash) + tag.charCodeAt(i)
+  return TAG_PALETTE[Math.abs(hash) % TAG_PALETTE.length]
+}
+
+async function openTagEditor(collection: string, filename: string) {
+  tagEditorCollection.value = collection
+  tagEditorImage.value = filename
+  tagEditorInput.value = ''
+  try {
+    const result = await send('memesluna/getImageMetadata', collection, filename)
+    tagEditorTags.value = result?.ok ? (result.tags || []) : []
+  } catch {
+    tagEditorTags.value = []
+  }
+  tagEditorVisible.value = true
+}
+
+async function addTagFromEditor() {
+  const tag = tagEditorInput.value.trim()
+  if (!tag || tagEditorTags.value.includes(tag)) return
+  tagEditorTags.value = [...tagEditorTags.value, tag]
+  tagEditorInput.value = ''
+  await saveTagEditor()
+}
+
+function removeTagFromEditor(tag: string) {
+  tagEditorTags.value = tagEditorTags.value.filter((t) => t !== tag)
+  saveTagEditor()
+}
+
+async function saveTagEditor() {
+  tagEditorSaving.value = true
+  try {
+    await send('memesluna/updateImageMetadata', {
+      collectionName: tagEditorCollection.value,
+      filename: tagEditorImage.value,
+      tags: tagEditorTags.value,
+    })
+    const key = getImageCacheKey(tagEditorCollection.value, tagEditorImage.value)
+    imageTagsCache.value[key] = [...tagEditorTags.value]
+    imageTagsCache.value = { ...imageTagsCache.value }
+  } catch (err) {
+    console.error('Failed to save tags:', err)
+  } finally {
+    tagEditorSaving.value = false
+  }
+}
+
+function closeTagEditor() {
+  tagEditorVisible.value = false
+  tagEditorImage.value = ''
+  tagEditorTags.value = []
+}
 
 const activeMoveDropdown = ref<string | null>(null)
 
@@ -1867,6 +2143,11 @@ async function enterCollectionDetail(item: any) {
   currentPage.value = 1
   clearSelectedImages()
   await loadCollectionResources(item.name)
+  // Load tags for all images in this collection
+  const allFns = [...detailResources.images]
+  if (allFns.length) {
+    loadImageTagsBatch(item.name, allFns)
+  }
 }
 
 function exitCollectionDetail() {
@@ -2370,7 +2651,7 @@ watch([collectionSearchQuery, collectionFilter], () => {
   padding: 6px 16px;
   font-size: 0.85rem;
   font-weight: 500;
-  color: var(--k-text-muted, rgba(55, 53, 47, 0.5));
+  color: var(--k-text-muted-light, rgba(55, 53, 47, 0.3));
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -3517,14 +3798,15 @@ watch([collectionSearchQuery, collectionFilter], () => {
 }
 
 .notion-gallery-card {
-  background: transparent;
-  border: none;
-  border-radius: 12px;
+  background: var(--k-bg-card, #fff);
+  border: 1px solid var(--k-color-border, rgba(55,53,47,0.08));
+  border-radius: 8px;
   position: relative;
-  aspect-ratio: 4 / 3;
   transition: opacity 0.15s ease;
   box-shadow: none;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .notion-gallery-card:hover {
@@ -3575,13 +3857,13 @@ watch([collectionSearchQuery, collectionFilter], () => {
 
 .gallery-img-container {
   width: 100%;
-  height: 100%;
+  aspect-ratio: 4 / 3;
   background-color: var(--k-bg-panel, #f7f7f5);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border-radius: 12px;
+  position: relative;
   box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
 }
 
@@ -3657,73 +3939,102 @@ watch([collectionSearchQuery, collectionFilter], () => {
 }
 
 /* Hover overlay on top of square image card */
-.gallery-card-overlay {
+/* Tags at top-right of image */
+.image-tag-corner {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(
-    to bottom,
-    rgba(0, 0, 0, 0.28) 0%,
-    rgba(0, 0, 0, 0) 35%,
-    rgba(0, 0, 0, 0) 100%
-  );
-  border-radius: 12px;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  pointer-events: none;
-  z-index: 10;
-}
-
-.notion-gallery-card:hover .gallery-card-overlay,
-.notion-gallery-card-active-dropdown .gallery-card-overlay {
-  opacity: 1;
-}
-
-.overlay-actions {
-  position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 6px;
+  right: 6px;
   display: flex;
-  gap: 6px;
-  pointer-events: auto;
+  flex-wrap: wrap;
+  gap: 3px;
+  justify-content: flex-end;
+  z-index: 5;
+  pointer-events: none;
 }
 
-.overlay-actions .card-action-btn {
+.image-tag-badge {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+
+.image-tag-badge.more {
+  background: rgba(0,0,0,0.45) !important;
+  text-shadow: none;
+}
+
+/* Action buttons at bottom of card */
+.gallery-card-actions {
+  display: flex;
+  gap: 1px;
+  border-top: 1px solid var(--k-color-border, rgba(55,53,47,0.08));
+  background: var(--k-bg-card, #fff);
+}
+
+.gallery-card-actions .card-action-btn {
+  flex: 1;
   border: none;
-  background-color: var(--memesluna-floating-action-bg);
-  backdrop-filter: blur(2px);
-  color: var(--k-text-normal, #37352f);
-  font-size: 0.65rem;
-  padding: 3px 8px;
-  border-radius: 9px;
+  background: transparent;
+  color: var(--k-text-muted, rgba(55,53,47,0.5));
+  font-size: 0.7rem;
+  padding: 6px 4px;
   cursor: pointer;
   font-weight: 500;
-  box-shadow: var(--memesluna-floating-shadow);
   transition: all 0.1s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  text-align: center;
+  position: relative;
 }
 
-.overlay-actions .card-action-btn.move:hover {
-  background: var(--k-color-success, #2b8a5c);
-  color: #ffffff;
+.gallery-card-actions .card-action-btn:hover {
+  background: var(--k-bg-panel, rgba(55,53,47,0.04));
+  color: var(--k-text-normal, #37352f);
 }
 
-.overlay-actions .card-action-btn:hover {
-  background: var(--k-bg-card, #ffffff);
-  color: var(--k-color-primary, #2563eb);
+.gallery-card-actions .card-action-btn.danger:hover {
+  background: rgba(235,87,87,0.08);
+  color: #eb5757;
 }
 
-.overlay-actions .card-action-btn.danger {
-  color: var(--k-color-danger, #eb5757);
+/* Move dropdown in action bar */
+.move-dropdown-trigger {
+  position: relative;
 }
 
-.overlay-actions .card-action-btn.danger:hover {
-  background: var(--k-color-danger, #eb5757);
-  color: #ffffff;
+.move-dropdown-menu-sm {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fff;
+  border: 1px solid rgba(55,53,47,0.1);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  padding: 4px;
+  z-index: 50;
+  white-space: nowrap;
+  min-width: 120px;
+  margin-bottom: 4px;
+}
+
+.move-dropdown-menu-sm .dropdown-item {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 5px 10px;
+  font-size: 0.75rem;
+  color: #37352f;
+  cursor: pointer;
+  border-radius: 4px;
+  text-align: left;
+}
+
+.move-dropdown-menu-sm .dropdown-item:hover {
+  background: rgba(55,53,47,0.06);
 }
 
 /* Notion Inputs/Select/Textarea inputs */
@@ -4987,6 +5298,192 @@ watch([collectionSearchQuery, collectionFilter], () => {
   .preview-route-table {
     min-width: 720px;
   }
+}
+
+/* View toggle pill */
+.view-toggle-pill {
+  display: inline-flex;
+  background: rgba(55, 53, 47, 0.06);
+  border-radius: 6px;
+  padding: 2px;
+  margin-right: 8px;
+}
+
+.pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  color: rgba(55, 53, 47, 0.4);
+  transition: all 0.15s ease;
+}
+
+.pill-btn:hover {
+  color: rgba(55, 53, 47, 0.65);
+  background: rgba(55, 53, 47, 0.04);
+}
+
+.pill-btn.active {
+  background: #fff;
+  color: #37352f;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+/* Tag view section */
+.tag-view-section {
+  margin-top: 8px;
+}
+
+/* Tag detail view */
+.tag-detail-view {
+  padding: 0;
+}
+
+.tag-images-grid {
+  margin-top: 16px;
+}
+
+.gallery-card-footer {
+  padding: 8px 10px;
+  font-size: 0.75rem;
+}
+
+.gallery-card-collection {
+  font-weight: 500;
+  color: var(--k-text-normal, #37352f);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gallery-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.mini-tag {
+  display: inline-block;
+  font-size: 0.65rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(55, 53, 47, 0.06);
+  color: rgba(55, 53, 47, 0.55);
+  cursor: pointer;
+  transition: all 0.1s ease;
+  white-space: nowrap;
+}
+
+.mini-tag:hover {
+  background: rgba(55, 53, 47, 0.1);
+  color: rgba(55, 53, 47, 0.8);
+}
+
+.mini-tag.active-tag {
+  background: rgba(35, 131, 226, 0.12);
+  color: #2383e2;
+  font-weight: 500;
+}
+
+/* Tag Editor Dialog */
+.tag-editor-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.3);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tag-editor-dialog {
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+  width: 420px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.tag-editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid rgba(55,53,47,0.08);
+}
+
+.tag-editor-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #37352f;
+}
+
+.tag-editor-subtitle {
+  font-size: 0.75rem;
+  color: rgba(55,53,47,0.4);
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.tag-editor-body {
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+}
+
+.tag-editor-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+  min-height: 32px;
+}
+
+.tag-editor-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(35, 131, 226, 0.1);
+  color: #2383e2;
+}
+
+.tag-remove-btn {
+  background: none;
+  border: none;
+  font-size: 1rem;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.5;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.tag-remove-btn:hover { opacity: 1; }
+
+.tag-editor-empty {
+  font-size: 0.78rem;
+  color: rgba(55,53,47,0.3);
+}
+
+.tag-editor-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.tag-editor-input {
+  flex: 1;
 }
 
 @media (max-width: 1180px) {

@@ -7,6 +7,7 @@ import type {} from 'koishi-plugin-chatluna'
 import { Context, h } from 'koishi'
 import { Config } from './config'
 import { MemesLunaService, hashImageBuffer, isReservedPath } from './service'
+import { AIAnnotator } from './aiAnnotator'
 
 function guessMimeByExt(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase()
@@ -72,6 +73,138 @@ function getLocalBaseUrl(ctx: Context, config: Config, requestOrigin?: string): 
   return requestOrigin || toAbsoluteBaseUrl(ctx, config)
 }
 
+function normalizeText(input: string): string {
+  return input
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+}
+
+function flattenText(input: string): string {
+  return normalizeText(input).replace(/\s+/g, '')
+}
+
+function splitTerms(input: string): string[] {
+  const normalized = normalizeText(input)
+  if (!normalized) return []
+
+  const terms = normalized.split(/\s+/).filter(Boolean)
+  const joined = normalized.replace(/\s+/g, '')
+
+  if (terms.length <= 1 && joined.length >= 4) {
+    for (let i = 0; i < joined.length - 1; i++) {
+      terms.push(joined.slice(i, i + 2))
+    }
+  }
+
+  return Array.from(new Set(terms.filter((t) => t.length > 0)))
+}
+
+function expandTerms(terms: string[], synonymGroups: string[][]): string[] {
+  const expanded = new Set<string>(terms)
+  for (const term of terms) {
+    for (const group of synonymGroups) {
+      if (group.includes(term)) {
+        for (const item of group) expanded.add(item)
+      }
+    }
+  }
+  return Array.from(expanded)
+}
+
+interface RankedImage {
+  image: any
+  score: number
+  matchedTerms: string[]
+}
+
+function rankImagesByQuery(
+  images: any[],
+  query: string,
+  synonymGroups: string[][]
+): RankedImage[] {
+  const rawQuery = query.trim()
+  if (!rawQuery) return []
+
+  const phrase = flattenText(rawQuery)
+  const terms = expandTerms(splitTerms(rawQuery), synonymGroups)
+  const ranked: RankedImage[] = []
+
+  for (const image of images) {
+    let aliases: string[] = []
+    let tags: string[] = []
+
+    try { const p = JSON.parse(image.aliases || '[]'); aliases = Array.isArray(p) ? p : [] } catch {}
+    try { const p = JSON.parse(image.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
+
+    const aliasesFlat = aliases.map((a: string) => flattenText(a))
+    const tagsFlat = tags.map((t: string) => flattenText(t))
+    const filenameFlat = flattenText(image.filename || '')
+
+    let score = 0
+    const matchedTerms = new Set<string>()
+
+    if (phrase.length >= 2) {
+      if (aliasesFlat.some((a: string) => a.includes(phrase))) score += 12
+      if (tagsFlat.some((t: string) => t.includes(phrase))) score += 8
+      if (filenameFlat.includes(phrase)) score += 4
+    }
+
+    for (const term of terms) {
+      const t = flattenText(term)
+      if (!t) continue
+
+      let matched = false
+      if (aliasesFlat.some((a: string) => a.includes(t))) { score += 6; matched = true }
+      if (tagsFlat.some((tag: string) => tag.includes(t))) { score += 4; matched = true }
+      if (filenameFlat.includes(t)) { score += 2; matched = true }
+      if (matched) matchedTerms.add(term)
+    }
+
+    if (matchedTerms.size >= 2) score += 2
+    if (matchedTerms.size >= 3) score += 2
+
+    if (score > 0) {
+      ranked.push({ image, score, matchedTerms: Array.from(matchedTerms) })
+    }
+  }
+
+  ranked.sort((a, b) => b.score - a.score)
+  return ranked
+}
+
+function parseImageTags(image: any): string[] {
+  try { const p = JSON.parse(image.tags || '[]'); return Array.isArray(p) ? p : [] } catch { return [] }
+}
+
+async function findByTag(
+  ctx: Context,
+  tagName: string,
+  config: Config,
+  service: MemesLunaService,
+  requestOrigin?: string
+): Promise<{ redirectTo: string } | null> {
+  // Query ALL images and find ones whose tags include tagName
+  const allImages = await ctx.database.get('memesluna_images', {})
+  const matched = allImages.filter((img: any) => {
+    const tags = parseImageTags(img)
+    return tags.some((t: string) => flattenText(t) === flattenText(tagName))
+  })
+
+  if (!matched.length) return null
+
+  const pick = matched[Math.floor(Math.random() * matched.length)]
+  const resource = await service.getResourceByRow(pick)
+  if (!resource) return null
+
+  if (resource.type === 'external') return { redirectTo: resource.value }
+  if (resource.type === 'storage' && resource.public_url) return { redirectTo: resource.public_url }
+
+  const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(pick.collection)}/images/${encodeURIComponent(resource.filename || '')}`
+  return { redirectTo: localUrl }
+}
+
 async function applyDynamicForward(
   ctx: Context,
   config: Config,
@@ -84,6 +217,9 @@ async function applyDynamicForward(
   const isCollection = await service.collectionExists(routeName)
 
   if (!endpoint && !isCollection) {
+    // 尝试按标签查找（跨合集）
+    const tagResult = await findByTag(ctx, routeName, config, service, requestOrigin)
+    if (tagResult) return tagResult
     return { notFound: true }
   }
 
@@ -97,6 +233,26 @@ async function applyDynamicForward(
     }
 
     return { redirectTo: endpoint.url }
+  }
+
+  const query = typeof _query?.q === 'string' ? _query.q.trim() : ''
+  if (query && isCollection) {
+    const images = await ctx.database.get('memesluna_images', { collection: routeName })
+    if (images.length > 0) {
+      const synonymGroups = config.synonymGroups || []
+      const ranked = rankImagesByQuery(images, query, synonymGroups)
+      const qualified = ranked.filter((item) => item.score >= 6)
+      if (qualified.length > 0) {
+        const pick = qualified[Math.floor(Math.random() * qualified.length)]
+        const resource = await service.getResourceByRow(pick.image)
+        if (resource) {
+          if (resource.type === 'external') return { redirectTo: resource.value }
+          if (resource.type === 'storage' && resource.public_url) return { redirectTo: resource.public_url }
+          const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
+          return { redirectTo: localUrl }
+        }
+      }
+    }
   }
 
   const resource = await service.getRandomResource(routeName)
@@ -433,8 +589,121 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
   consoleService.addListener('memesluna/deleteAllStagedImages', withReady(async () => {
     return await service.deleteAllStagedImages()
   }))
-}
 
+  consoleService.addListener(
+    'memesluna/annotateImage',
+    withReady(async (collectionName: string, filename: string) => {
+      const image = await service.getLocalImageBuffer(collectionName, filename)
+      if (!image) return { ok: false, error: '图片不存在' }
+
+      const annotator = service.annotator
+      if (!annotator) return { ok: false, error: 'AI 标注器未就绪' }
+
+      const result = await annotator.annotate(image.buffer, {
+        filename,
+        collectionName,
+        imageUrl: `${config.backendPath}/${encodeURIComponent(collectionName)}/${encodeURIComponent(filename)}`,
+      })
+      if (!result) return { ok: false, error: 'AI 标注失败' }
+
+      // Get the database row to find its ID
+      const rows = await ctx.database.get('memesluna_images', { collection: collectionName, filename })
+      if (!rows.length) return { ok: false, error: '数据库记录不存在' }
+
+      await service.updateImageAnnotation(rows[0].id, result.aliases, result.tags)
+      return { ok: true, aliases: result.aliases, tags: result.tags }
+    })
+  )
+
+  consoleService.addListener(
+    'memesluna/updateImageMetadata',
+    withReady(async (payload: { collectionName: string; filename: string; aliases?: string[]; tags?: string[] }) => {
+      const { collectionName, filename, aliases, tags } = payload
+      if (!collectionName || !filename) return { ok: false, error: '参数不完整' }
+
+      const rows = await ctx.database.get('memesluna_images', { collection: collectionName, filename })
+      if (!rows.length) return { ok: false, error: '图片不存在' }
+
+      const currentAliases: string[] = (() => { try { const p = JSON.parse(rows[0].aliases || '[]'); return Array.isArray(p) ? p : [] } catch { return [] } })()
+      const currentTags: string[] = (() => { try { const p = JSON.parse(rows[0].tags || '[]'); return Array.isArray(p) ? p : [] } catch { return [] } })()
+
+      const mergedAliases = aliases ?? currentAliases
+      const mergedTags = tags ?? currentTags
+
+      await service.updateImageAnnotation(rows[0].id, mergedAliases, mergedTags)
+      return { ok: true, aliases: mergedAliases, tags: mergedTags }
+    })
+  )
+
+  consoleService.addListener(
+    'memesluna/getImageMetadata',
+    withReady(async (collectionName: string, filename: string) => {
+      const rows = await ctx.database.get('memesluna_images', { collection: collectionName, filename })
+      if (!rows.length) return { ok: false, error: '图片不存在' }
+
+      let aliases: string[] = []
+      let tags: string[] = []
+      try { const p = JSON.parse(rows[0].aliases || '[]'); aliases = Array.isArray(p) ? p : [] } catch {}
+      try { const p = JSON.parse(rows[0].tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
+
+      return { ok: true, aliases, tags }
+    })
+  )
+
+  consoleService.addListener(
+    'memesluna/getTagSummary',
+    withReady(async () => {
+      const rows = await ctx.database.get('memesluna_images', {})
+      const tagMap = new Map<string, { count: number; previewUrls: string[] }>()
+
+      for (const row of rows) {
+        let tags: string[] = []
+        try { const p = JSON.parse(row.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
+        for (const tag of tags) {
+          if (!tagMap.has(tag)) {
+            tagMap.set(tag, { count: 0, previewUrls: [] })
+          }
+          const entry = tagMap.get(tag)!
+          entry.count++
+          if (entry.previewUrls.length < 4) {
+            const bp = config.backendPath || '/memesluna'
+            entry.previewUrls.push(`${bp}/api/collections/${encodeURIComponent(row.collection)}/images/${encodeURIComponent(row.filename)}`)
+          }
+        }
+      }
+
+      const result = Array.from(tagMap.entries())
+        .map(([tag, data]) => ({ tag, count: data.count, previewUrls: data.previewUrls }))
+        .sort((a, b) => b.count - a.count)
+
+      return result
+    })
+  )
+
+  consoleService.addListener(
+    'memesluna/getImagesByTag',
+    withReady(async (tag: string) => {
+      const rows = await ctx.database.get('memesluna_images', {})
+      const matched: Array<{ collection: string; filename: string; tags: string[]; imageUrl: string }> = []
+      const bp = config.backendPath || '/memesluna'
+
+      for (const row of rows) {
+        let tags: string[] = []
+        try { const p = JSON.parse(row.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
+        if (tags.some((t: string) => t.toLowerCase() === tag.toLowerCase())) {
+          matched.push({
+            collection: row.collection,
+            filename: row.filename,
+            tags,
+            imageUrl: `${bp}/api/collections/${encodeURIComponent(row.collection)}/images/${encodeURIComponent(row.filename)}`,
+          })
+        }
+      }
+
+      return { tag, total: matched.length, images: matched }
+    })
+  )
+}
 
 function applyAutoCollect(ctx: Context, config: Config) {
   if (!config.autoCollect) return
@@ -935,6 +1204,14 @@ export function apply(ctx: Context, config: Config) {
     const service = ctx.memesluna
     applyConsole(ctx, config, service)
   })
+
+  if (config.autoAnnotate) {
+    ctx.inject(['memesluna', 'chatluna'], async (ctx) => {
+      const annotator = new AIAnnotator(ctx, config)
+      await annotator.initialize()
+      ctx.memesluna.setAnnotator(annotator)
+    })
+  }
 
   const root = ctx.command('memesluna', 'MemesLuna 命令')
 

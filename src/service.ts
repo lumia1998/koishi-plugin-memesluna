@@ -3,6 +3,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { Context, Service, Eval } from 'koishi'
 import type { Config } from './config'
+import type { AIAnnotator } from './aiAnnotator'
 
 export function sanitizeFilename(filename: string): string {
   const ext = path.extname(filename).toLowerCase()
@@ -213,6 +214,7 @@ interface MemesLunaStagedImageRow {
 export class MemesLunaService extends Service {
   private _readyPromise: Promise<void>
   private _readyResolve: () => void
+  private _annotator: AIAnnotator | null = null
 
   constructor(ctx: Context, public config: Config) {
     super(ctx, 'memesluna', true)
@@ -232,6 +234,14 @@ export class MemesLunaService extends Service {
 
   get ready() {
     return this._readyPromise
+  }
+
+  setAnnotator(annotator: AIAnnotator): void {
+    this._annotator = annotator
+  }
+
+  get annotator(): AIAnnotator | null {
+    return this._annotator
   }
 
   private defineDatabase() {
@@ -270,6 +280,8 @@ export class MemesLunaService extends Service {
         mime: 'string',
         hash: 'string',
         perceptual_hash: 'string',
+        aliases: { type: 'string', initial: '[]' },
+        tags: { type: 'string', initial: '[]' },
         created_at: 'timestamp',
       },
       {
@@ -1059,12 +1071,13 @@ export class MemesLunaService extends Service {
     const safeBase = sanitizeFilename(`${baseName}${finalExt}`)
     const finalName = await this.deduplicateDatabaseFilename(collectionName, safeBase)
 
+    const id = randomUUID()
     const backend = this.getStorageBackend()
     if (backend) {
       // S3/WebDAV upload
       const result = await backend.upload(buffer, finalName)
       await this.ctx.database.create('memesluna_images', {
-        id: randomUUID(),
+        id,
         collection: collectionName,
         index,
         filename: finalName,
@@ -1073,6 +1086,8 @@ export class MemesLunaService extends Service {
         public_url: result.publicUrl || '',
         mime: this.getMimeByFilename(finalName),
         ...fingerprints,
+        aliases: '[]',
+        tags: '[]',
         created_at: new Date(),
       })
     } else {
@@ -1080,7 +1095,7 @@ export class MemesLunaService extends Service {
       const dir = this.getCollectionDir(collectionName)
       await fs.writeFile(path.join(dir, finalName), buffer)
       await this.ctx.database.create('memesluna_images', {
-        id: randomUUID(),
+        id,
         collection: collectionName,
         index,
         filename: finalName,
@@ -1088,8 +1103,20 @@ export class MemesLunaService extends Service {
         value: finalName,
         mime: this.getMimeByFilename(finalName),
         ...fingerprints,
+        aliases: '[]',
+        tags: '[]',
         created_at: new Date(),
       })
+    }
+
+    if (this._annotator && this.config.autoAnnotate) {
+      this._annotator.annotate(buffer, {
+        filename: finalName,
+        collectionName,
+        imageUrl: `${this.config.backendPath}/${encodeURIComponent(collectionName)}/${encodeURIComponent(finalName)}`,
+      }).then(result => {
+        if (result) return this.updateImageAnnotation(id, result.aliases, result.tags)
+      }).catch(err => this.ctx.logger('memesluna').warn('Auto-annotate failed:', err))
     }
 
     return finalName
@@ -1170,6 +1197,8 @@ export class MemesLunaService extends Service {
           public_url: result.publicUrl || '',
           mime: this.getMimeByFilename(finalName),
           ...p.fingerprints,
+          aliases: '[]',
+          tags: '[]',
           created_at: new Date(),
         })
       } else {
@@ -1184,6 +1213,8 @@ export class MemesLunaService extends Service {
           value: finalName,
           mime: this.getMimeByFilename(finalName),
           ...p.fingerprints,
+          aliases: '[]',
+          tags: '[]',
           created_at: new Date(),
         })
       }
@@ -1192,7 +1223,38 @@ export class MemesLunaService extends Service {
 
     // Insert database rows in parallel
     await Promise.all(databaseRows.map((row) => this.ctx.database.create('memesluna_images', row)))
+
+    if (this._annotator && this.config.autoAnnotate) {
+      for (let i = 0; i < processed.length; i++) {
+        const buf = processed[i].buffer
+        const rowId = databaseRows[i].id
+        const imgFilename = databaseRows[i].filename
+        this._annotator.annotate(buf, {
+          filename: imgFilename,
+          collectionName,
+          imageUrl: `${this.config.backendPath}/${encodeURIComponent(collectionName)}/${encodeURIComponent(imgFilename)}`,
+        }).then(result => {
+          if (result) return this.updateImageAnnotation(rowId, result.aliases, result.tags)
+        }).catch(err => this.ctx.logger('memesluna').warn('Auto-annotate failed:', err))
+      }
+    }
+
     return results
+  }
+
+  async getImageById(id: string) {
+    const rows = await this.ctx.database.get('memesluna_images', { id })
+    return rows[0] ?? null
+  }
+
+  async updateImageAnnotation(id: string, aliases: string[], tags: string[]): Promise<boolean> {
+    const row = await this.getImageById(id)
+    if (!row) return false
+    await this.ctx.database.set('memesluna_images', { id }, {
+      aliases: JSON.stringify(aliases),
+      tags: JSON.stringify(tags),
+    })
+    return true
   }
 
 
@@ -1527,6 +1589,25 @@ export class MemesLunaService extends Service {
     }
   }
 
+  async getResourceByRow(image: any): Promise<CollectionResource | null> {
+    if (image.type === 'external') {
+      return { type: 'external', value: image.value }
+    } else if (image.type === 'storage') {
+      return {
+        type: 'storage',
+        filename: image.filename,
+        value: image.value,
+        public_url: image.public_url,
+      }
+    } else {
+      return {
+        type: 'local',
+        filename: image.filename,
+        value: path.join(this.getCollectionDir(image.collection), image.filename),
+      }
+    }
+  }
+
   private mapEndpoint(row: MemesLunaEndpointRow): ApiEndpoint {
     return {
       id: row.id,
@@ -1664,6 +1745,8 @@ declare module 'koishi' {
       mime: string
       hash: string
       perceptual_hash: string
+      aliases: string
+      tags: string
       created_at: Date
     }
 
