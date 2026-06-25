@@ -256,7 +256,8 @@ async function applyDynamicForward(
   if (query && isCollection) {
     const images = await ctx.database.get('memesluna_images', { collection: routeName })
     if (images.length > 0) {
-      const synonymGroups = config.synonymGroups || []
+      const rawSynonymGroups = config.synonymGroups || []
+      const synonymGroups = rawSynonymGroups.map(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
       const ranked = rankImagesByQuery(images, query, synonymGroups)
       const qualified = ranked.filter((item) => item.score >= 6)
       if (qualified.length > 0) {

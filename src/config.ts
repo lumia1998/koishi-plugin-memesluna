@@ -45,7 +45,7 @@ export interface Config {
   model: string
   autoAnnotate: boolean
   annotatePrompt: string
-  synonymGroups: string[][]
+  synonymGroups: string[]
   aiConcurrency: number
   aiBatchDelay: number
   aiMaxAttempts: number
@@ -147,15 +147,15 @@ export const Config: Schema<Config> = Schema.intersect([
       .role('textarea')
       .default(DEFAULT_ANNOTATE_PROMPT)
       .description('AI 标注提示词模板，要求输出 aliases 和 tags 两个字段的 JSON'),
-    synonymGroups: Schema.array(Schema.array(Schema.string()))
+    synonymGroups: Schema.array(Schema.string())
       .default([
-        ['幸福', '开心', '高兴', '快乐', '治愈', '满足'],
-        ['委屈', '难过', '伤心', '沮丧'],
-        ['生气', '愤怒', '炸毛', '不爽'],
-        ['可爱', '萌', '卖萌', '软萌'],
-        ['害羞', '脸红', '羞涩'],
+        '幸福,开心,高兴,快乐,治愈,满足',
+        '委屈,难过,伤心,沮丧',
+        '生气,愤怒,炸毛,不爽',
+        '可爱,萌,卖萌,软萌',
+        '害羞,脸红,羞涩',
       ])
-      .description('搜索同义词组，同一组内的词在检索时互相扩展'),
+      .description('搜索同义词组，每行填写一组同义词，词与词之间用逗号（, 或 ，）隔开'),
     aiConcurrency: Schema.number()
       .min(1).max(10).default(2)
       .description('AI 标注并发数'),
