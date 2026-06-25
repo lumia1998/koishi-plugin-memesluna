@@ -1374,6 +1374,64 @@ export function apply(ctx: Context, config: Config) {
       return await stoleAction(session, name)
     })
 
+  root
+    .subcommand('.tagall', '批量为以往的图片自动进行 AI 语义打标')
+    .option('force', '-f 强制为已打标的图片重新进行 AI 标注')
+    .action(async ({ session, options }) => {
+      const service = ctx.memesluna
+      await service.ready
+      const annotator = service.annotator
+      if (!annotator) return 'AI 标注器未就绪，请先在配置中指定模型（model）。'
+
+      const images = await ctx.database.get('memesluna_images', {})
+      const targets = images.filter((img) => {
+        if (options?.force) return true
+        let tags: string[] = []
+        try { const p = JSON.parse(img.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
+        return tags.length === 0
+      })
+
+      if (targets.length === 0) {
+        return '没有发现需要标注的图片。'
+      }
+
+      if (session) {
+        await session.send(`开始批量为 ${targets.length} 张图片进行 AI 自动标注，这可能需要一些时间，请稍候...`)
+      }
+
+      let successCount = 0
+      let failCount = 0
+
+      for (const row of targets) {
+        try {
+          if (row.type !== 'local') continue
+          const image = await service.getLocalImageBuffer(row.collection, row.filename)
+          if (!image) {
+            failCount++
+            continue
+          }
+          const result = await annotator.annotate(image.buffer, {
+            filename: row.filename,
+            collectionName: row.collection,
+            imageUrl: `${config.backendPath}/${encodeURIComponent(row.collection)}/${encodeURIComponent(row.filename)}`,
+          })
+          if (result) {
+            await service.updateImageAnnotation(row.id, result.aliases, result.tags)
+            successCount++
+          } else {
+            failCount++
+          }
+          // Delay between requests to avoid rate limits
+          await new Promise((resolve) => setTimeout(resolve, config.aiBatchDelay || 500))
+        } catch (err) {
+          failCount++
+          ctx.logger('memesluna').error(`Failed batch annotating image ${row.filename}:`, err)
+        }
+      }
+
+      return `批量 AI 标注已完成！\n成功：${successCount} 张\n失败：${failCount} 张`
+    })
+
   if (config.injectVariables) {
     ctx.inject(['memesluna', 'chatluna', 'server'], async (ctx) => {
       const service = ctx.memesluna
