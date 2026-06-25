@@ -5,6 +5,7 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages'
 import { getMessageContent } from 'koishi-plugin-chatluna/utils/string'
 import { ComputedRef } from 'koishi-plugin-chatluna'
 import { parseRawModelName } from 'koishi-plugin-chatluna/llm-core/utils/count_tokens'
+import { loadOptionalSharp, loadPhoton } from './service'
 
 const tryParse = <T>(text: string): T | null => {
     try {
@@ -96,6 +97,54 @@ function getImageMimeFromBytes(buffer: Buffer): string {
     return 'image/png'
 }
 
+async function compressImageForAI(buffer: Buffer): Promise<{ buffer: Buffer; mimeType: string }> {
+    const originalMime = getImageMimeFromBytes(buffer)
+    // If it's already small and not a GIF, do not compress
+    if (buffer.length < 150 * 1024 && originalMime !== 'image/gif') {
+        return { buffer, mimeType: originalMime }
+    }
+
+    const sharp = loadOptionalSharp()
+    if (sharp) {
+        try {
+            const compressed = await sharp(buffer)
+                .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
+                .jpeg({ quality: 80 })
+                .toBuffer()
+            return { buffer: compressed, mimeType: 'image/jpeg' }
+        } catch (err) {
+            // fallback
+        }
+    }
+
+    const photon = loadPhoton()
+    if (photon) {
+        let img: any = null
+        try {
+            img = photon.PhotonImage.new_from_byteslice(new Uint8Array(buffer))
+            const w = img.get_width()
+            const h = img.get_height()
+            if (w > 512 || h > 512) {
+                const ratio = Math.min(512 / w, 512 / h)
+                const newW = Math.round(w * ratio)
+                const newH = Math.round(h * ratio)
+                const resized = photon.resize(img, newW, newH, photon.SamplingFilter.Nearest)
+                img.free()
+                img = resized
+            }
+            const jpegBytes = img.get_bytes_jpeg(80)
+            img.free()
+            return { buffer: Buffer.from(jpegBytes), mimeType: 'image/jpeg' }
+        } catch (err) {
+            if (img) {
+                try { img.free() } catch {}
+            }
+        }
+    }
+
+    return { buffer, mimeType: originalMime }
+}
+
 export class AIAnnotator {
     private _model: ComputedRef<ChatLunaChatModel> | null = null
 
@@ -109,7 +158,7 @@ export class AIAnnotator {
     }
 
     async initialize(): Promise<void> {
-        if (!this.config.autoAnnotate) return
+        if (!this.config.model) return
 
         try {
             const [platform] = parseRawModelName(this.config.model)
@@ -121,13 +170,6 @@ export class AIAnnotator {
         } catch (error) {
             this.ctx.logger.error('AI标注模型加载失败:', error)
         }
-    }
-
-    private buildImages(
-        buffer: Buffer
-    ): { data: string; mimeType: string }[] {
-        const mimeType = getImageMimeFromBytes(buffer)
-        return [{ data: buffer.toString('base64'), mimeType }]
     }
 
     private parseResult(text: string): AnnotateResult | null {
@@ -147,7 +189,7 @@ export class AIAnnotator {
     }
 
     async annotate(buffer: Buffer, context?: AnnotateContext): Promise<AnnotateResult | null> {
-        if (!this._model?.value || !this.config.autoAnnotate) return null
+        if (!this._model?.value) return null
         if (buffer.length === 0) return null
 
         // 替换 prompt 模板中的上下文变量
@@ -163,6 +205,9 @@ export class AIAnnotator {
             ? `请分析这张表情图片（文件名: ${context.filename || '未知'}, 合集: ${context.collectionName || '未知'})`
             : '请分析这张表情图片'
 
+        // 预压缩图片以减小 API 负载并解决大图报错问题
+        const compressed = await compressImageForAI(buffer)
+
         for (let attempt = 0; attempt < this.config.aiMaxAttempts; attempt++) {
             if (attempt > 0) {
                 const delay =
@@ -171,7 +216,7 @@ export class AIAnnotator {
             }
 
             try {
-                const images = this.buildImages(buffer)
+                const images = [{ data: compressed.buffer.toString('base64'), mimeType: compressed.mimeType }]
                 const result = await this._model.value.invoke([
                     new SystemMessage(prompt),
                     new HumanMessage({

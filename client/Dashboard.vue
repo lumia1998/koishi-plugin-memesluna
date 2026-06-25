@@ -482,39 +482,209 @@
                 <div class="tag-editor-dialog">
                   <div class="tag-editor-header">
                     <div>
-                      <div class="tag-editor-title">编辑标签</div>
+                      <div class="tag-editor-title">编辑标注 & 标签</div>
                       <div class="tag-editor-subtitle">{{ tagEditorCollection }} / {{ tagEditorImage }}</div>
                     </div>
-                    <button @click="closeTagEditor" class="icon-btn hover-bg">
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                      <button 
+                        @click="triggerAIAnnotation" 
+                        class="btn btn-secondary btn-small"
+                        :disabled="aiAnnotating || tagEditorSaving"
+                        style="display: flex; align-items: center; gap: 4px; padding: 4px 8px; font-size: 12px;"
+                      >
+                        <svg v-if="aiAnnotating" class="animate-spin" viewBox="0 0 24 24" fill="none" width="12" height="12" style="margin-right: 2px;">
+                          <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" style="opacity: 0.25;"></circle>
+                          <path d="M4 12a8 8 0 0 1 8-8V0C5.373 0 0 5.373 0 12h4z" fill="currentColor"></path>
+                        </svg>
+                        <span v-else>✨</span>
+                        {{ aiAnnotating ? '自动标注中...' : 'AI 自动标注' }}
+                      </button>
+                      <button @click="closeTagEditor" class="icon-btn hover-bg" :disabled="aiAnnotating || tagEditorSaving">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                          <path d="M18 6 6 18"></path><path d="m6 6 12 12"></path>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="tag-editor-body" style="display: flex; flex-direction: column; gap: 16px;">
+                    <!-- Tags Section -->
+                    <div class="tag-section-wrapper" style="border-bottom: 1px solid rgba(120, 120, 120, 0.15); padding-bottom: 14px;">
+                      <div class="tag-section-label" style="font-weight: 600; font-size: 13px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                        <span>🏷️</span>
+                        <span>路由标签 (Tags)</span>
+                        <span style="font-size: 11px; font-weight: normal; color: var(--k-text-muted, #888); margin-left: 4px;">用于跨合集路由随机返回</span>
+                      </div>
+                      <div class="tag-editor-list" style="margin-bottom: 8px; min-height: 36px; display: flex; flex-wrap: wrap; gap: 6px;">
+                        <span
+                          v-for="tag in tagEditorTags"
+                          :key="tag"
+                          class="tag-editor-tag"
+                        >
+                          {{ tag }}
+                          <button @click="removeTagFromEditor(tag)" class="tag-remove-btn" :disabled="tagEditorSaving || aiAnnotating">×</button>
+                        </span>
+                        <span v-if="!tagEditorTags.length" class="tag-editor-empty" style="color: var(--k-text-muted, #888); font-size: 12px; font-style: italic;">暂无标签</span>
+                      </div>
+                      <div class="tag-editor-input-row" style="display: flex; gap: 8px;">
+                        <input
+                          v-model="tagEditorInput"
+                          class="flat-input tag-editor-input"
+                          placeholder="添加路由标签（如：可爱、震惊），回车添加"
+                          @keyup.enter="addTagFromEditor"
+                          :disabled="tagEditorSaving || aiAnnotating"
+                          style="flex-grow: 1;"
+                        />
+                        <button @click="addTagFromEditor" class="btn btn-secondary btn-small" :disabled="!tagEditorInput.trim() || tagEditorSaving || aiAnnotating">
+                          添加
+                        </button>
+                      </div>
+                    </div>
+
+                    <!-- Aliases Section -->
+                    <div class="tag-section-wrapper">
+                      <div class="tag-section-label" style="font-weight: 600; font-size: 13px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                        <span>🔍</span>
+                        <span>检索别名 (Aliases)</span>
+                        <span style="font-size: 11px; font-weight: normal; color: var(--k-text-muted, #888); margin-left: 4px;">用于合集内 q=关键词 语义检索</span>
+                      </div>
+                      <div class="tag-editor-list" style="margin-bottom: 8px; min-height: 36px; display: flex; flex-wrap: wrap; gap: 6px;">
+                        <span
+                          v-for="alias in tagEditorAliases"
+                          :key="alias"
+                          class="tag-editor-tag"
+                          style="background-color: var(--k-bg-panel, rgba(120, 120, 120, 0.08)); border-color: transparent;"
+                        >
+                          {{ alias }}
+                          <button @click="removeAliasFromEditor(alias)" class="tag-remove-btn" :disabled="tagEditorSaving || aiAnnotating">×</button>
+                        </span>
+                        <span v-if="!tagEditorAliases.length" class="tag-editor-empty" style="color: var(--k-text-muted, #888); font-size: 12px; font-style: italic;">暂无别名</span>
+                      </div>
+                      <div class="tag-editor-input-row" style="display: flex; gap: 8px;">
+                        <input
+                          v-model="aliasEditorInput"
+                          class="flat-input tag-editor-input"
+                          placeholder="添加搜索短语别名，回车添加"
+                          @keyup.enter="addAliasFromEditor"
+                          :disabled="tagEditorSaving || aiAnnotating"
+                          style="flex-grow: 1;"
+                        />
+                        <button @click="addAliasFromEditor" class="btn btn-secondary btn-small" :disabled="!aliasEditorInput.trim() || tagEditorSaving || aiAnnotating">
+                          添加
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Bulk Tag Editor Dialog -->
+              <div v-if="bulkTagEditorVisible" class="tag-editor-overlay" @click.self="bulkTagEditorVisible = false">
+                <div class="tag-editor-dialog">
+                  <div class="tag-editor-header">
+                    <div>
+                      <div class="tag-editor-title">批量设置标签 & 别名</div>
+                      <div class="tag-editor-subtitle">已选择 {{ selectedImages.length }} 张图片</div>
+                    </div>
+                    <button @click="bulkTagEditorVisible = false" class="icon-btn hover-bg" :disabled="bulkTagEditorSaving">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
                         <path d="M18 6 6 18"></path><path d="m6 6 12 12"></path>
                       </svg>
                     </button>
                   </div>
-                  <div class="tag-editor-body">
-                    <div class="tag-editor-list">
-                      <span
-                        v-for="tag in tagEditorTags"
-                        :key="tag"
-                        class="tag-editor-tag"
-                      >
-                        {{ tag }}
-                        <button @click="removeTagFromEditor(tag)" class="tag-remove-btn" :disabled="tagEditorSaving">×</button>
-                      </span>
-                      <span v-if="!tagEditorTags.length" class="tag-editor-empty">暂无标签</span>
+                  <div class="tag-editor-body" style="display: flex; flex-direction: column; gap: 16px;">
+                    <!-- Operation Mode Toggle -->
+                    <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(120, 120, 120, 0.15); padding-bottom: 12px;">
+                      <span style="font-size: 13px; font-weight: 600;">操作模式</span>
+                      <div class="view-toggle-pill" style="margin: 0;">
+                        <button
+                          :class="['pill-btn', bulkTagOperationMode === 'add' ? 'active' : '']"
+                          @click="bulkTagOperationMode = 'add'"
+                          style="font-size: 12px; padding: 4px 8px;"
+                        >
+                          追加标签
+                        </button>
+                        <button
+                          :class="['pill-btn', bulkTagOperationMode === 'replace' ? 'active' : '']"
+                          @click="bulkTagOperationMode = 'replace'"
+                          style="font-size: 12px; padding: 4px 8px;"
+                        >
+                          覆盖标签
+                        </button>
+                      </div>
                     </div>
-                    <div class="tag-editor-input-row">
-                      <input
-                        v-model="tagEditorInput"
-                        class="flat-input tag-editor-input"
-                        placeholder="输入标签名，回车添加"
-                        @keyup.enter="addTagFromEditor"
-                        :disabled="tagEditorSaving"
-                      />
-                      <button @click="addTagFromEditor" class="asset-btn primary" :disabled="!tagEditorInput.trim() || tagEditorSaving">
-                        {{ tagEditorSaving ? '保存中...' : '添加' }}
-                      </button>
+
+                    <!-- Tags Section -->
+                    <div class="tag-section-wrapper" style="border-bottom: 1px solid rgba(120, 120, 120, 0.15); padding-bottom: 14px;">
+                      <div class="tag-section-label" style="font-weight: 600; font-size: 13px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                        <span>🏷️</span>
+                        <span>批量添加标签 (Tags)</span>
+                      </div>
+                      <div class="tag-editor-list" style="margin-bottom: 8px; min-height: 36px; display: flex; flex-wrap: wrap; gap: 6px;">
+                        <span
+                          v-for="tag in bulkTagEditorTags"
+                          :key="tag"
+                          class="tag-editor-tag"
+                        >
+                          {{ tag }}
+                          <button @click="removeTagFromBulkEditor(tag)" class="tag-remove-btn" :disabled="bulkTagEditorSaving">×</button>
+                        </span>
+                        <span v-if="!bulkTagEditorTags.length" class="tag-editor-empty" style="color: var(--k-text-muted, #888); font-size: 12px; font-style: italic;">等待添加标签</span>
+                      </div>
+                      <div class="tag-editor-input-row" style="display: flex; gap: 8px;">
+                        <input
+                          v-model="bulkTagEditorInput"
+                          class="flat-input tag-editor-input"
+                          placeholder="输入标签名，回车添加"
+                          @keyup.enter="addTagToBulkEditor"
+                          :disabled="bulkTagEditorSaving"
+                          style="flex-grow: 1;"
+                        />
+                        <button @click="addTagToBulkEditor" class="btn btn-secondary btn-small" :disabled="!bulkTagEditorInput.trim() || bulkTagEditorSaving">
+                          添加
+                        </button>
+                      </div>
                     </div>
+
+                    <!-- Aliases Section -->
+                    <div class="tag-section-wrapper">
+                      <div class="tag-section-label" style="font-weight: 600; font-size: 13px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                        <span>🔍</span>
+                        <span>批量添加别名 (Aliases)</span>
+                      </div>
+                      <div class="tag-editor-list" style="margin-bottom: 8px; min-height: 36px; display: flex; flex-wrap: wrap; gap: 6px;">
+                        <span
+                          v-for="alias in bulkTagEditorAliases"
+                          :key="alias"
+                          class="tag-editor-tag"
+                          style="background-color: var(--k-bg-panel, rgba(120, 120, 120, 0.08)); border-color: transparent;"
+                        >
+                          {{ alias }}
+                          <button @click="removeAliasFromBulkEditor(alias)" class="tag-remove-btn" :disabled="bulkTagEditorSaving">×</button>
+                        </span>
+                        <span v-if="!bulkTagEditorAliases.length" class="tag-editor-empty" style="color: var(--k-text-muted, #888); font-size: 12px; font-style: italic;">等待添加别名</span>
+                      </div>
+                      <div class="tag-editor-input-row" style="display: flex; gap: 8px;">
+                        <input
+                          v-model="bulkAliasEditorInput"
+                          class="flat-input tag-editor-input"
+                          placeholder="输入别名，回车添加"
+                          @keyup.enter="addAliasToBulkEditor"
+                          :disabled="bulkTagEditorSaving"
+                          style="flex-grow: 1;"
+                        />
+                        <button @click="addAliasToBulkEditor" class="btn btn-secondary btn-small" :disabled="!bulkAliasEditorInput.trim() || bulkTagEditorSaving">
+                          添加
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="tag-editor-footer" style="margin-top: 18px; display: flex; gap: 12px; justify-content: flex-end; border-top: 1px solid rgba(120, 120, 120, 0.15); padding-top: 12px;">
+                    <button @click="bulkTagEditorVisible = false" class="btn btn-secondary" :disabled="bulkTagEditorSaving">
+                      取消
+                    </button>
+                    <button @click="saveBulkTagEditor" class="btn btn-primary" :disabled="bulkTagEditorSaving || (!bulkTagEditorTags.length && !bulkTagEditorAliases.length)">
+                      {{ bulkTagEditorSaving ? '保存中...' : '确认应用' }}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -608,7 +778,7 @@
                         移动
                       </button>
                     </div>
-                    <button class="toolbar-btn compact" disabled>设置标签</button>
+                    <button @click="openBulkTagEditor" class="toolbar-btn compact">设置标签</button>
                     <button v-if="selectedImages.length" @click="deleteSelectedImages" class="toolbar-btn compact danger">
                       批量删除
                     </button>
@@ -1249,8 +1419,8 @@ interface PreviewRouteRow {
 }
 
 // Navigation states
-const activeMenu = ref<'resources' | 'distribution' | 'staging' | 'settings'>('resources')
-const activeResourceView = ref<'collection' | 'tag'>('collection')
+const activeMenu = ref<'resources' | 'distribution' | 'staging' | 'settings'>((sessionStorage.getItem('memesluna_active_menu') as any) || 'resources')
+const activeResourceView = ref<'collection' | 'tag'>((sessionStorage.getItem('memesluna_active_resource_view') as any) || 'collection')
 
 // Tag summary data
 const tagSummary = ref<{ tag: string; count: number; previewUrls: string[] }[]>([])
@@ -1346,14 +1516,101 @@ const galleryViewMode = ref<'grid' | 'list'>('grid')
 const apiPreviewUrl = ref('')
 const apiPreviewLoading = ref(false)
 
-// Tag editor state
+// Tag and Metadata editor state
 const tagEditorVisible = ref(false)
 const tagEditorImage = ref('')
 const tagEditorCollection = ref('')
 const tagEditorTags = ref<string[]>([])
+const tagEditorAliases = ref<string[]>([])
 const tagEditorInput = ref('')
+const aliasEditorInput = ref('')
 const tagEditorSaving = ref(false)
+const aiAnnotating = ref(false)
 const imageTagsCache = ref<Record<string, string[]>>({})
+const imageAliasesCache = ref<Record<string, string[]>>({})
+
+// Bulk Tag and Metadata editor state
+const bulkTagEditorVisible = ref(false)
+const bulkTagEditorTags = ref<string[]>([])
+const bulkTagEditorAliases = ref<string[]>([])
+const bulkTagEditorInput = ref('')
+const bulkAliasEditorInput = ref('')
+const bulkTagEditorSaving = ref(false)
+const bulkTagOperationMode = ref<'add' | 'replace'>('add')
+
+function openBulkTagEditor() {
+  bulkTagEditorTags.value = []
+  bulkTagEditorAliases.value = []
+  bulkTagEditorInput.value = ''
+  bulkAliasEditorInput.value = ''
+  bulkTagOperationMode.value = 'add'
+  bulkTagEditorVisible.value = true
+}
+
+function addTagToBulkEditor() {
+  const tag = bulkTagEditorInput.value.trim()
+  if (!tag || bulkTagEditorTags.value.includes(tag)) return
+  bulkTagEditorTags.value = [...bulkTagEditorTags.value, tag]
+  bulkTagEditorInput.value = ''
+}
+
+function removeTagFromBulkEditor(tag: string) {
+  bulkTagEditorTags.value = bulkTagEditorTags.value.filter(t => t !== tag)
+}
+
+function addAliasToBulkEditor() {
+  const alias = bulkAliasEditorInput.value.trim()
+  if (!alias || bulkTagEditorAliases.value.includes(alias)) return
+  bulkTagEditorAliases.value = [...bulkTagEditorAliases.value, alias]
+  bulkAliasEditorInput.value = ''
+}
+
+function removeAliasFromBulkEditor(alias: string) {
+  bulkTagEditorAliases.value = bulkTagEditorAliases.value.filter(a => a !== alias)
+}
+
+async function saveBulkTagEditor() {
+  if (!currentCollection.value || !selectedImages.value.length) return
+  bulkTagEditorSaving.value = true
+  
+  const filenames = [...selectedImages.value]
+  const collectionName = currentCollection.value.name
+  
+  try {
+    await Promise.all(filenames.map(async (filename) => {
+      const key = getImageCacheKey(collectionName, filename)
+      let finalTags = [...bulkTagEditorTags.value]
+      let finalAliases = [...bulkTagEditorAliases.value]
+      
+      if (bulkTagOperationMode.value === 'add') {
+        const existingTags = imageTagsCache.value[key] || []
+        const existingAliases = imageAliasesCache.value[key] || []
+        finalTags = Array.from(new Set([...existingTags, ...finalTags]))
+        finalAliases = Array.from(new Set([...existingAliases, ...finalAliases]))
+      }
+      
+      await send('memesluna/updateImageMetadata', {
+        collectionName,
+        filename,
+        tags: finalTags,
+        aliases: finalAliases,
+      })
+      
+      // Update cache
+      imageTagsCache.value[key] = finalTags
+      imageAliasesCache.value[key] = finalAliases
+    }))
+    
+    showToast(`成功应用批量修改（共 ${filenames.length} 张图片）`, 'success')
+    clearSelectedImages()
+    bulkTagEditorVisible.value = false
+  } catch (err) {
+    console.error('Failed to save bulk tags:', err)
+    showToast('批量设置标签失败', 'error')
+  } finally {
+    bulkTagEditorSaving.value = false
+  }
+}
 
 function getImageCacheKey(collection: string, filename: string): string {
   return `${collection}/${filename}`
@@ -1373,6 +1630,7 @@ async function loadImageTagsBatch(collection: string, filenames: string[]) {
     if (result.status === 'fulfilled' && result.value?.ok) {
       const key = getImageCacheKey(collection, filenames[i])
       imageTagsCache.value[key] = result.value.tags || []
+      imageAliasesCache.value[key] = result.value.aliases || []
     }
   }
 }
@@ -1389,11 +1647,15 @@ async function openTagEditor(collection: string, filename: string) {
   tagEditorCollection.value = collection
   tagEditorImage.value = filename
   tagEditorInput.value = ''
+  aliasEditorInput.value = ''
+  aiAnnotating.value = false
   try {
     const result = await send('memesluna/getImageMetadata', collection, filename)
     tagEditorTags.value = result?.ok ? (result.tags || []) : []
+    tagEditorAliases.value = result?.ok ? (result.aliases || []) : []
   } catch {
     tagEditorTags.value = []
+    tagEditorAliases.value = []
   }
   tagEditorVisible.value = true
 }
@@ -1411,6 +1673,41 @@ function removeTagFromEditor(tag: string) {
   saveTagEditor()
 }
 
+async function addAliasFromEditor() {
+  const alias = aliasEditorInput.value.trim()
+  if (!alias || tagEditorAliases.value.includes(alias)) return
+  tagEditorAliases.value = [...tagEditorAliases.value, alias]
+  aliasEditorInput.value = ''
+  await saveTagEditor()
+}
+
+function removeAliasFromEditor(alias: string) {
+  tagEditorAliases.value = tagEditorAliases.value.filter((a) => a !== alias)
+  saveTagEditor()
+}
+
+async function triggerAIAnnotation() {
+  if (aiAnnotating.value || tagEditorSaving.value) return
+  aiAnnotating.value = true
+  try {
+    const result = await send('memesluna/annotateImage', tagEditorCollection.value, tagEditorImage.value)
+    if (result && result.ok) {
+      tagEditorTags.value = result.tags || []
+      tagEditorAliases.value = result.aliases || []
+      const key = getImageCacheKey(tagEditorCollection.value, tagEditorImage.value)
+      imageTagsCache.value[key] = [...tagEditorTags.value]
+      imageAliasesCache.value[key] = [...tagEditorAliases.value]
+      showToast('AI 语义标注已成功完成！', 'success')
+    } else {
+      showToast(result?.error || 'AI 标注失败，请检查配置或模型状态', 'error')
+    }
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : 'AI 标注接口请求出错', 'error')
+  } finally {
+    aiAnnotating.value = false
+  }
+}
+
 async function saveTagEditor() {
   tagEditorSaving.value = true
   try {
@@ -1418,10 +1715,13 @@ async function saveTagEditor() {
       collectionName: tagEditorCollection.value,
       filename: tagEditorImage.value,
       tags: tagEditorTags.value,
+      aliases: tagEditorAliases.value,
     })
     const key = getImageCacheKey(tagEditorCollection.value, tagEditorImage.value)
     imageTagsCache.value[key] = [...tagEditorTags.value]
     imageTagsCache.value = { ...imageTagsCache.value }
+    imageAliasesCache.value[key] = [...tagEditorAliases.value]
+    imageAliasesCache.value = { ...imageAliasesCache.value }
   } catch (err) {
     console.error('Failed to save tags:', err)
   } finally {
@@ -1433,6 +1733,8 @@ function closeTagEditor() {
   tagEditorVisible.value = false
   tagEditorImage.value = ''
   tagEditorTags.value = []
+  tagEditorAliases.value = []
+  aiAnnotating.value = false
 }
 
 const activeMoveDropdown = ref<string | null>(null)
@@ -1722,6 +2024,7 @@ function showToast(message: string, type: 'info' | 'success' | 'error' = 'info')
 // Switches horizontal Notion view switcher
 function switchMainMenu(menu: 'resources' | 'distribution' | 'staging' | 'settings') {
   activeMenu.value = menu
+  sessionStorage.setItem('memesluna_active_menu', menu)
   if (menu === 'settings') {
     fetchSettingsPreview()
   }
@@ -2133,6 +2436,7 @@ async function confirmDeleteCollection(name: string) {
 async function enterCollectionDetail(item: any) {
   activeCollectionMenu.value = null
   currentCollection.value = item
+  sessionStorage.setItem('memesluna_active_collection', item.name)
   newDescription.value = item.description || ''
   externalLinksText.value = ''
   gallerySearch.value = ''
@@ -2152,6 +2456,7 @@ async function enterCollectionDetail(item: any) {
 
 function exitCollectionDetail() {
   currentCollection.value = null
+  sessionStorage.removeItem('memesluna_active_collection')
   if (apiPreviewUrl.value) URL.revokeObjectURL(apiPreviewUrl.value)
   apiPreviewUrl.value = ''
   clearSelectedImages()
@@ -2490,6 +2795,30 @@ onMounted(async () => {
   window.addEventListener('click', closeDropdowns)
   loading.value = true
   await fetchState()
+  
+  // Restore current collection detail view or tag detail view if it was active
+  if (activeMenu.value === 'resources') {
+    if (activeResourceView.value === 'tag') {
+      await switchToTagView()
+      const savedTag = sessionStorage.getItem('memesluna_active_tag_view')
+      if (savedTag) {
+        await filterByTag(savedTag)
+      }
+    } else {
+      const savedCol = sessionStorage.getItem('memesluna_active_collection')
+      if (savedCol) {
+        const col = collections.value.find(c => c.name === savedCol)
+        if (col) {
+          await enterCollectionDetail(col)
+        }
+      }
+    }
+  } else if (activeMenu.value === 'staging') {
+    await refreshStagedImages()
+  } else if (activeMenu.value === 'settings') {
+    await fetchSettingsPreview()
+  }
+  
   loading.value = false
 })
 
@@ -2513,9 +2842,29 @@ watch([gallerySearch, gallerySort, galleryFilter], () => {
 watch([collectionSearchQuery, collectionFilter], () => {
   activeCollectionMenu.value = null
 })
+
+watch(activeResourceView, (newView) => {
+  sessionStorage.setItem('memesluna_active_resource_view', newView)
+})
+
+watch(currentTagView, (newTag) => {
+  if (newTag) {
+    sessionStorage.setItem('memesluna_active_tag_view', newTag)
+  } else {
+    sessionStorage.removeItem('memesluna_active_tag_view')
+  }
+})
 </script>
 
 <style scoped>
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.animate-spin {
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
 /* GENERAL ROOT STYLE DESIGNED LIKE SLICK MODERN NOTION DOCUMENT */
 .memesluna-app-layout {
   min-height: 100vh;
@@ -3858,7 +4207,7 @@ watch([collectionSearchQuery, collectionFilter], () => {
 .gallery-img-container {
   width: 100%;
   aspect-ratio: 4 / 3;
-  background-color: var(--k-bg-panel, #f7f7f5);
+  background-color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3973,6 +4322,25 @@ watch([collectionSearchQuery, collectionFilter], () => {
   gap: 1px;
   border-top: 1px solid var(--k-color-border, rgba(55,53,47,0.08));
   background: var(--k-bg-card, #fff);
+}
+
+.notion-gallery-grid:not(.list-mode) .gallery-card-actions {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out;
+  transform: translateY(4px);
+  z-index: 10;
+}
+
+.notion-gallery-grid:not(.list-mode) .notion-gallery-card:hover .gallery-card-actions,
+.notion-gallery-grid:not(.list-mode) .notion-gallery-card-active-dropdown .gallery-card-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .gallery-card-actions .card-action-btn {
@@ -4443,7 +4811,7 @@ watch([collectionSearchQuery, collectionFilter], () => {
   padding: 0;
   border: none;
   border-bottom: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
-  background-color: var(--k-bg-panel, #f8fafc);
+  background-color: #ffffff;
   cursor: pointer;
 }
 
@@ -4481,12 +4849,15 @@ watch([collectionSearchQuery, collectionFilter], () => {
 
 .staging-ext-tag {
   flex: 0 0 auto;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background-color: var(--memesluna-primary-soft-bg);
-  color: var(--k-color-primary, #2563eb);
-  font-size: 0.66rem;
-  font-weight: 750;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background-color: var(--k-bg-panel, #f1f5f9);
+  color: var(--k-text-muted, #64748b);
+  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .staging-meta-grid {

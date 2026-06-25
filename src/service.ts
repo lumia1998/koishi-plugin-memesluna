@@ -32,7 +32,7 @@ export function hashImageBuffer(buffer: Buffer): string {
 let cachedSharp: any = undefined
 let cachedPhoton: any = undefined
 
-function loadOptionalSharp(): any | null {
+export function loadOptionalSharp(): any | null {
   if (cachedSharp !== undefined) return cachedSharp
   try {
     const packageName = 'sharp'
@@ -44,7 +44,7 @@ function loadOptionalSharp(): any | null {
   return cachedSharp
 }
 
-function loadPhoton(): any | null {
+export function loadPhoton(): any | null {
   if (cachedPhoton !== undefined) return cachedPhoton
   try {
     const packageName = '@cf-wasm/photon/node'
@@ -395,6 +395,17 @@ export class MemesLunaService extends Service {
         }
       }
 
+      // Cleanup deleted local files from database
+      const filesSet = new Set(files.map(sanitizeFilename))
+      const missingLocalImages = existingImages.filter(
+        (img) => img.type === 'local' && !filesSet.has(img.value || img.filename)
+      )
+      if (missingLocalImages.length > 0) {
+        await this.ctx.database.remove('memesluna_images', {
+          id: missingLocalImages.map((img) => img.id),
+        })
+      }
+
       // Sync links file
       const linksFile = this.getCollectionLinksFile(colName)
       try {
@@ -433,7 +444,10 @@ export class MemesLunaService extends Service {
     await fs.mkdir(this.getStorageRoot(), { recursive: true })
     await fs.mkdir(this.getStagingDir(), { recursive: true })
     await this.syncExistingFilesToDatabase()
-    this.backfillImageFingerprints().catch((err) => {
+    Promise.all([
+      this.backfillImagesFingerprints(),
+      this.backfillStagedFingerprints()
+    ]).catch((err) => {
       this.ctx.logger('memesluna').warn('Failed to backfill image fingerprints in background:', err)
     })
   }
@@ -520,8 +534,15 @@ export class MemesLunaService extends Service {
     return null
   }
 
-  private async backfillImageFingerprints() {
-    const images = await this.ctx.database.get('memesluna_images', {})
+  private async backfillImagesFingerprints() {
+    const images = await this.ctx.database.get('memesluna_images', {
+      $or: [
+        { hash: '' },
+        { hash: { $exists: false } },
+        { perceptual_hash: '' },
+        { perceptual_hash: { $exists: false } }
+      ]
+    })
     for (const row of images) {
       if (row.hash && row.perceptual_hash) continue
       const buffer = await this.getImageRowBuffer(row)
@@ -536,8 +557,17 @@ export class MemesLunaService extends Service {
       }
       await this.ctx.database.set('memesluna_images', { id: row.id }, await this.getImageFingerprints(buffer))
     }
+  }
 
-    const stagedRows = await this.ctx.database.get('memesluna_staged_images', {})
+  private async backfillStagedFingerprints() {
+    const stagedRows = await this.ctx.database.get('memesluna_staged_images', {
+      $or: [
+        { hash: '' },
+        { hash: { $exists: false } },
+        { perceptual_hash: '' },
+        { perceptual_hash: { $exists: false } }
+      ]
+    })
     for (const row of stagedRows) {
       if (row.hash && row.perceptual_hash) continue
       try {
@@ -587,7 +617,7 @@ export class MemesLunaService extends Service {
 
   async getSimilarStagedImages(threshold = this.config.similarityThreshold || 0.9): Promise<SimilarStagedImagesResult> {
     const normalizedThreshold = Math.min(1, Math.max(0.5, Number(threshold) || 0.9))
-    await this.backfillImageFingerprints()
+    await this.backfillStagedFingerprints()
     const rows = await this.ctx.database.get('memesluna_staged_images', {})
     const items = rows
       .map((row) => this.mapStagedImage(row as MemesLunaStagedImageRow))

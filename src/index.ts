@@ -29,15 +29,32 @@ function guessMimeByExt(filePath: string): string {
   }
 }
 
-async function downloadImage(ctx: Context, url: string): Promise<Buffer> {
+async function downloadImage(ctx: Context, url: string, maxBytes?: number): Promise<Buffer> {
+  if (url.startsWith('data:')) {
+    const match = /^data:([^;]+);base64,(.*)$/.exec(url)
+    if (!match) {
+      throw new Error('Invalid data URL format')
+    }
+    const buffer = Buffer.from(match[2], 'base64')
+    if (maxBytes && buffer.length > maxBytes) {
+      throw new Error(`Data URL size exceeds maximum limit of ${maxBytes} bytes`)
+    }
+    return buffer
+  }
+
   let lastError: Error | null = null
   for (let i = 0; i < 3; i++) {
     try {
       const data = await ctx.http.get<ArrayBuffer>(url, {
         responseType: 'arraybuffer',
         timeout: 10000,
-      })
-      return Buffer.from(data)
+        maxContentLength: maxBytes,
+      } as any)
+      const buffer = Buffer.from(data)
+      if (maxBytes && buffer.length > maxBytes) {
+        throw new Error(`Downloaded image size exceeds maximum limit of ${maxBytes} bytes`)
+      }
+      return buffer
     } catch (err) {
       lastError = err as Error
       await new Promise((resolve) => setTimeout(resolve, 1000))
@@ -734,7 +751,7 @@ function applyAutoCollect(ctx: Context, config: Config) {
 
     for (const url of imageUrls) {
       try {
-        const buffer = await downloadImage(ctx, url)
+        const buffer = await downloadImage(ctx, url, maxBytes)
         const ext = getExtFromMagicBytes(buffer)
         if (!ext) continue
         if (buffer.length < minBytes || buffer.length > maxBytes) continue
@@ -1205,7 +1222,7 @@ export function apply(ctx: Context, config: Config) {
     applyConsole(ctx, config, service)
   })
 
-  if (config.autoAnnotate) {
+  if (config.model) {
     ctx.inject(['memesluna', 'chatluna'], async (ctx) => {
       const annotator = new AIAnnotator(ctx, config)
       await annotator.initialize()
@@ -1303,7 +1320,7 @@ export function apply(ctx: Context, config: Config) {
 
     for (const url of imageUrls) {
       try {
-        const buffer = await downloadImage(ctx, url)
+        const buffer = await downloadImage(ctx, url, 50 * 1024 * 1024)
         const ext = getExtFromMagicBytes(buffer)
         if (!ext) {
           return '图片格式不兼容，仅支持 JPG/PNG/GIF/WEBP/BMP 格式图片（已拒绝 AVIF，且不会放入暂缓区）'
