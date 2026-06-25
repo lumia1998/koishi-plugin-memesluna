@@ -428,12 +428,7 @@ async function buildAdminState(service: MemesLunaService) {
   }
 }
 
-async function updateMemesVariable(ctx: Context, config: Config, service: MemesLunaService) {
-
-  const baseUrl = toAbsoluteBaseUrl(ctx, config)
-  const inventory = await service.buildRouteInventory(config.backendPath)
-
-  // Gather unique tags from database
+async function getPromptTags(ctx: Context, config: Config): Promise<string> {
   const realTags = new Set<string>()
   try {
     const rows = await ctx.database.get('memesluna_images', {})
@@ -446,7 +441,6 @@ async function updateMemesVariable(ctx: Context, config: Config, service: MemesL
     ctx.logger('memesluna').warn('Failed to fetch image tags for prompt rendering:', err)
   }
 
-  // Gather tags from synonymGroups (actual plugin configuration)
   const rawSynonymGroups = config.synonymGroups || []
   for (const group of rawSynonymGroups) {
     const words = group.split(/[,，]/).map(item => item.trim()).filter(Boolean)
@@ -456,7 +450,14 @@ async function updateMemesVariable(ctx: Context, config: Config, service: MemesL
   }
 
   const allTagsList = Array.from(realTags).filter(Boolean)
-  const tagsStr = allTagsList.length > 0 ? allTagsList.join('、') : '开心、无语、生气、可爱'
+  return allTagsList.length > 0 ? allTagsList.join('、') : '开心、无语、生气、可爱'
+}
+
+async function updateMemesVariable(ctx: Context, config: Config, service: MemesLunaService) {
+
+  const baseUrl = toAbsoluteBaseUrl(ctx, config)
+  const inventory = await service.buildRouteInventory(config.backendPath)
+  const tagsStr = await getPromptTags(ctx, config)
 
   ;(ctx as any).chatluna.promptRenderer.setVariable('endpoint', inventory || '- 暂无可用路由')
 
@@ -845,10 +846,12 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     const collections = await service.getCollections()
     const collectionInfos = await Promise.all(collections.map((name) => service.getCollectionInfo(name)))
     const inventory = await service.buildRouteInventory(basePath)
+    const tagsStr = await getPromptTags(ctx, config)
 
     const llmPrompt = config.injectVariablesPrompt
       .replaceAll('{endpoint}', inventory || '- 暂无可用路由')
       .replaceAll('{base_url}', baseUrl)
+      .replaceAll('{tags}', tagsStr)
 
     koa.body = {
       llmPrompt,
