@@ -81,10 +81,10 @@ export const Config: Schema<Config> = Schema.intersect([
 
 重要输出要求：
 1. 必须使用 Markdown 图片语法将表情包插入到回复中，格式为：![描述](图片地址)。
-2. 例如：如果你想发送“{example_tag}”标签下的表情包，请在回复中包含类似 ![{example_tag}]({base_url}/memesluna/{example_tag}) 的格式。
+2. 例如：如果你想发送“开心”标签下的表情包，请在回复中包含类似 ![开心]({base_url}/memesluna/开心) 的格式。
 3. 绝对不要直接输出纯文本 URL 链接，必须包裹在 Markdown 图片语法中。
 4. 合集名和标签名不要重名，合集优先匹配。只使用上面列出的合集名和标签名，不要自己编造路径。`)
-      .description('注入到 ChatLuna {{memesluna}} 变量的提示词模板，支持 {endpoint}、{base_url}、{tags} 和 {example_tag} 占位符'),
+      .description('注入到 ChatLuna {{memesluna}} 变量的提示词模板，支持 {endpoint}、{base_url} 和 {tags} 占位符'),
   }).description('基础配置'),
 
   Schema.object({

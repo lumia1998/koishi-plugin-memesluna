@@ -433,19 +433,30 @@ async function updateMemesVariable(ctx: Context, config: Config, service: MemesL
   const baseUrl = toAbsoluteBaseUrl(ctx, config)
   const inventory = await service.buildRouteInventory(config.backendPath)
 
-  // Gather unique tags from synonymGroups (actual plugin configuration)
-  const configTags = new Set<string>()
+  // Gather unique tags from database
+  const realTags = new Set<string>()
+  try {
+    const rows = await ctx.database.get('memesluna_images', {})
+    for (const row of rows) {
+      let tags: string[] = []
+      try { const p = JSON.parse(row.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
+      for (const tag of tags) realTags.add(tag)
+    }
+  } catch (err) {
+    ctx.logger('memesluna').warn('Failed to fetch image tags for prompt rendering:', err)
+  }
+
+  // Gather tags from synonymGroups (actual plugin configuration)
   const rawSynonymGroups = config.synonymGroups || []
   for (const group of rawSynonymGroups) {
     const words = group.split(/[,，]/).map(item => item.trim()).filter(Boolean)
     for (const word of words) {
-      configTags.add(word)
+      realTags.add(word)
     }
   }
 
-  const allTagsList = Array.from(configTags).filter(Boolean)
+  const allTagsList = Array.from(realTags).filter(Boolean)
   const tagsStr = allTagsList.length > 0 ? allTagsList.join('、') : '开心、无语、生气、可爱'
-  const exampleTag = allTagsList.length > 0 ? allTagsList[0] : '开心'
 
   ;(ctx as any).chatluna.promptRenderer.setVariable('endpoint', inventory || '- 暂无可用路由')
 
@@ -453,7 +464,6 @@ async function updateMemesVariable(ctx: Context, config: Config, service: MemesL
     .replaceAll('{endpoint}', inventory || '- 暂无可用路由')
     .replaceAll('{base_url}', baseUrl)
     .replaceAll('{tags}', tagsStr)
-    .replaceAll('{example_tag}', exampleTag)
 
   ;(ctx as any).chatluna.promptRenderer.setVariable('memesluna', memeslunaText)
 }
