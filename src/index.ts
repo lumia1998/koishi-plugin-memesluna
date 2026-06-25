@@ -1401,32 +1401,47 @@ export function apply(ctx: Context, config: Config) {
 
       let successCount = 0
       let failCount = 0
+      const chunkSize = 20
 
-      for (const row of targets) {
-        try {
-          if (row.type !== 'local') continue
-          const image = await service.getLocalImageBuffer(row.collection, row.filename)
-          if (!image) {
-            failCount++
-            continue
-          }
-          const result = await annotator.annotate(image.buffer, {
-            filename: row.filename,
-            collectionName: row.collection,
-            imageUrl: `${config.backendPath}/${encodeURIComponent(row.collection)}/${encodeURIComponent(row.filename)}`,
-          })
-          if (result) {
-            await service.updateImageAnnotation(row.id, result.aliases, result.tags)
-            successCount++
-          } else {
-            failCount++
-          }
-          // Delay between requests to avoid rate limits
-          await new Promise((resolve) => setTimeout(resolve, config.aiBatchDelay || 500))
-        } catch (err) {
-          failCount++
-          ctx.logger('memesluna').error(`Failed batch annotating image ${row.filename}:`, err)
+      for (let i = 0; i < targets.length; i += chunkSize) {
+        const chunk = targets.slice(i, i + chunkSize)
+        if (session) {
+          await session.send(`正在处理第 ${i + 1} ~ ${Math.min(i + chunkSize, targets.length)} 张图片（当前成功：${successCount}，失败：${failCount}）...`)
         }
+
+        const concurrency = config.aiConcurrency || 2
+        const chunkTargets = [...chunk]
+        const workers = Array(concurrency).fill(null).map(async () => {
+          while (chunkTargets.length > 0) {
+            const row = chunkTargets.shift()
+            if (!row) break
+            try {
+              if (row.type !== 'local') continue
+              const image = await service.getLocalImageBuffer(row.collection, row.filename)
+              if (!image) {
+                failCount++
+                continue
+              }
+              const result = await annotator.annotate(image.buffer, {
+                filename: row.filename,
+                collectionName: row.collection,
+                imageUrl: `${config.backendPath}/${encodeURIComponent(row.collection)}/${encodeURIComponent(row.filename)}`,
+              })
+              if (result) {
+                await service.updateImageAnnotation(row.id, result.aliases, result.tags)
+                successCount++
+              } else {
+                failCount++
+              }
+              // Delay between requests to avoid rate limits
+              await new Promise((resolve) => setTimeout(resolve, config.aiBatchDelay || 500))
+            } catch (err) {
+              failCount++
+              ctx.logger('memesluna').error(`Failed batch annotating image ${row.filename}:`, err)
+            }
+          }
+        })
+        await Promise.all(workers)
       }
 
       return `批量 AI 标注已完成！\n成功：${successCount} 张\n失败：${failCount} 张`
