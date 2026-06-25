@@ -76,15 +76,15 @@ export const Config: Schema<Config> = Schema.intersect([
 
 使用方法：
 - 合集名路由：{base_url}/memesluna/合集名 自动随机返回该合集的图片
-- 标签名路由：{base_url}/memesluna/标签名 按标签跨合集随机返回图片（标签名如：开心、无语、生气、可爱）
+- 标签名路由：{base_url}/memesluna/标签名 按标签跨合集随机返回图片（可用标签如：{tags}）
 - 合集搜索：{base_url}/memesluna/合集名?q=关键词 在合集中按语义搜索
 
 重要输出要求：
 1. 必须使用 Markdown 图片语法将表情包插入到回复中，格式为：![描述](图片地址)。
-2. 例如：如果你想发送“开心”标签下的表情包，请在回复中包含类似 ![开心]({base_url}/memesluna/开心) 的格式。
+2. 例如：如果你想发送“{example_tag}”标签下的表情包，请在回复中包含类似 ![{example_tag}]({base_url}/memesluna/{example_tag}) 的格式。
 3. 绝对不要直接输出纯文本 URL 链接，必须包裹在 Markdown 图片语法中。
 4. 合集名和标签名不要重名，合集优先匹配。只使用上面列出的合集名和标签名，不要自己编造路径。`)
-      .description('注入到 ChatLuna {{memesluna}} 变量的提示词模板，支持 {endpoint} 和 {base_url} 占位符'),
+      .description('注入到 ChatLuna {{memesluna}} 变量的提示词模板，支持 {endpoint}、{base_url}、{tags} 和 {example_tag} 占位符'),
   }).description('基础配置'),
 
   Schema.object({
