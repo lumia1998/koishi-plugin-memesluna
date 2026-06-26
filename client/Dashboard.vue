@@ -825,8 +825,19 @@
                       <span class="image-format-badge" :class="item.type">{{ item.type === 'external' ? 'LINK' : getImageExtension(item.value) }}</span>
                     </div>
                     <div class="gallery-card-info">
-                      <div class="gallery-card-header-row">
-                        <div class="gallery-card-title" :title="item.label">{{ item.label }}</div>
+                      <div class="gallery-card-title" :title="item.label">{{ item.label }}</div>
+                      <div class="gallery-card-footer-row">
+                        <div v-if="item.type === 'local'" class="gallery-card-tags">
+                          <span
+                            v-for="tag in getImageTags(item.value)"
+                            :key="tag"
+                            class="gallery-card-tag-badge"
+                            :style="{ backgroundColor: tagColor(tag) + '12', color: tagColor(tag), borderColor: tagColor(tag) + '22' }"
+                          >{{ tag }}</span>
+                          <span v-if="!getImageTags(item.value).length" class="gallery-card-tag-empty">暂无标签</span>
+                        </div>
+                        <div v-else class="gallery-card-tags-placeholder"></div>
+
                         <div class="gallery-card-menu-container">
                           <button class="gallery-card-menu-btn" @click.stop="toggleCardMenu(item.value)" title="更多操作">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
@@ -858,15 +869,6 @@
                             </template>
                           </div>
                         </div>
-                      </div>
-                      <div v-if="item.type === 'local'" class="gallery-card-tags">
-                        <span
-                          v-for="tag in getImageTags(item.value)"
-                          :key="tag"
-                          class="gallery-card-tag-badge"
-                          :style="{ backgroundColor: tagColor(tag) + '12', color: tagColor(tag), borderColor: tagColor(tag) + '22' }"
-                        >{{ tag }}</span>
-                        <span v-if="!getImageTags(item.value).length" class="gallery-card-tag-empty">暂无标签</span>
                       </div>
                     </div>
                   </div>
@@ -4331,12 +4333,22 @@ watch(currentTagView, (newTag) => {
   background: transparent;
 }
 
-.gallery-card-header-row {
+.gallery-card-footer-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   position: relative;
+  width: 100%;
+}
+
+.gallery-card-tags-placeholder {
+  flex: 1;
+}
+
+.notion-gallery-card-active-dropdown {
+  overflow: visible !important;
+  z-index: 60 !important;
 }
 
 .gallery-card-title {
