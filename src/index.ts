@@ -1496,6 +1496,51 @@ export function apply(ctx: Context, config: Config) {
       return `批量 AI 标注已完成！\n成功：${successCount} 张\n失败：${failCount} 张`
     })
 
+  root
+    .subcommand('.untagall', '一键清空表情图片的标签')
+    .alias('.cleartags')
+    .option('collection', '-c <collection:string> 仅清空指定合集的图片标签')
+    .action(async ({ session, options }) => {
+      const service = ctx.memesluna
+      await service.ready
+
+      const filter: any = {}
+      if (options?.collection) {
+        const hasCol = await service.collectionExists(options.collection)
+        if (!hasCol) {
+          return `表情包合集 "${options.collection}" 不存在。`
+        }
+        filter.collection = options.collection
+      }
+
+      const images = await ctx.database.get('memesluna_images', filter)
+      const targets = images.filter((img) => {
+        let tags: string[] = []
+        try { const p = JSON.parse(img.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
+        return tags.length > 0
+      })
+
+      if (targets.length === 0) {
+        return '没有发现需要清空标签的图片。'
+      }
+
+      if (session) {
+        await session.send(`开始清空 ${targets.length} 张表情图片的标签，请稍候...`)
+      }
+
+      let successCount = 0
+      for (const row of targets) {
+        try {
+          await service.updateImageAnnotation(row.id, undefined, [])
+          successCount++
+        } catch (err) {
+          ctx.logger('memesluna').error(`Failed clearing tag for ${row.filename}:`, err)
+        }
+      }
+
+      return `已成功清空 ${successCount} 张表情图片的标签！`
+    })
+
   if (config.injectVariables) {
     ctx.inject(['memesluna', 'chatluna', 'server'], async (ctx) => {
       const service = ctx.memesluna

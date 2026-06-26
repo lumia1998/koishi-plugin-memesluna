@@ -1298,13 +1298,13 @@ export class MemesLunaService extends Service {
     return rows[0] ?? null
   }
 
-  async updateImageAnnotation(id: string, aliases: string[], tags: string[]): Promise<boolean> {
+  async updateImageAnnotation(id: string, aliases?: string[], tags?: string[]): Promise<boolean> {
     const row = await this.getImageById(id)
     if (!row) return false
-    await this.ctx.database.set('memesluna_images', { id }, {
-      aliases: JSON.stringify(aliases),
-      tags: JSON.stringify(tags),
-    })
+    const update: any = {}
+    if (aliases !== undefined) update.aliases = JSON.stringify(aliases)
+    if (tags !== undefined) update.tags = JSON.stringify(tags)
+    await this.ctx.database.set('memesluna_images', { id }, update)
     return true
   }
 
