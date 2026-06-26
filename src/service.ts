@@ -1255,17 +1255,38 @@ export class MemesLunaService extends Service {
     await Promise.all(databaseRows.map((row) => this.ctx.database.create('memesluna_images', row)))
 
     if (this._annotator && this.config.autoAnnotate) {
-      for (let i = 0; i < processed.length; i++) {
-        const buf = processed[i].buffer
-        const rowId = databaseRows[i].id
-        const imgFilename = databaseRows[i].filename
-        this._annotator.annotate(buf, {
-          filename: imgFilename,
-          collectionName,
-          imageUrl: `${this.config.backendPath}/${encodeURIComponent(collectionName)}/${encodeURIComponent(imgFilename)}`,
-        }).then(result => {
-          if (result) return this.updateImageAnnotation(rowId, result.aliases, result.tags)
-        }).catch(err => this.ctx.logger('memesluna').warn('Auto-annotate failed:', err))
+      const concurrency = this.config.aiConcurrency || 2
+      const queue = processed.map((p, i) => ({
+        buf: p.buffer,
+        rowId: databaseRows[i].id,
+        imgFilename: databaseRows[i].filename
+      }))
+
+      const worker = async () => {
+        while (queue.length > 0) {
+          const item = queue.shift()
+          if (!item) break
+          try {
+            const result = await this._annotator!.annotate(item.buf, {
+              filename: item.imgFilename,
+              collectionName,
+              imageUrl: `${this.config.backendPath}/${encodeURIComponent(collectionName)}/${encodeURIComponent(item.imgFilename)}`,
+            })
+            if (result) {
+              await this.updateImageAnnotation(item.rowId, result.aliases, result.tags)
+            }
+            if (queue.length > 0 && this.config.aiBatchDelay > 0) {
+              await new Promise((resolve) => setTimeout(resolve, this.config.aiBatchDelay))
+            }
+          } catch (err) {
+            this.ctx.logger('memesluna').warn(`Auto-annotate failed for ${item.imgFilename}:`, err)
+          }
+        }
+      }
+
+      // Start concurrent workers to run multiple requests in parallel
+      for (let w = 0; w < Math.min(concurrency, queue.length); w++) {
+        worker()
       }
     }
 

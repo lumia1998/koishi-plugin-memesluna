@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-memesluna",
   "description": "Image Forward service for Koishi with ChatLuna integration",
-  "version": "0.5.3-alpha.3",
+  "version": "0.5.3-alpha.4",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "types": "lib/index.d.ts",

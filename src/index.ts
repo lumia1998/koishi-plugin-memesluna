@@ -29,6 +29,16 @@ function guessMimeByExt(filePath: string): string {
   }
 }
 
+function getTagRepresentative(tag: string, synonymGroups: string[][]): string | null {
+  const normTag = tag.trim().toLowerCase()
+  for (const group of synonymGroups) {
+    if (group.some(member => member.trim().toLowerCase() === normTag)) {
+      return group[0] // First word as representative
+    }
+  }
+  return null
+}
+
 async function downloadImage(ctx: Context, url: string, maxBytes?: number): Promise<Buffer> {
   if (url.startsWith('data:')) {
     const match = /^data:([^;]+);base64,(.*)$/.exec(url)
@@ -202,11 +212,17 @@ async function findByTag(
   service: MemesLunaService,
   requestOrigin?: string
 ): Promise<{ redirectTo: string } | null> {
-  // Query ALL images and find ones whose tags include tagName
   const allImages = await ctx.database.get('memesluna_images', {})
+  const rawSynonymGroups = config.synonymGroups || []
+  const synonymGroups = rawSynonymGroups.map(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
+
+  const normTagName = tagName.trim().toLowerCase()
+  const targetGroup = synonymGroups.find(group => group.some(member => member.trim().toLowerCase() === normTagName))
+  const allowedTags = targetGroup ? new Set(targetGroup.map(t => t.toLowerCase())) : new Set([normTagName])
+
   const matched = allImages.filter((img: any) => {
     const tags = parseImageTags(img)
-    return tags.some((t: string) => flattenText(t) === flattenText(tagName))
+    return tags.some((t: string) => allowedTags.has(t.trim().toLowerCase()))
   })
 
   if (!matched.length) return null
@@ -509,6 +525,7 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
         endpoints,
         collections: detailedCollections.filter(Boolean),
         stagedImages,
+        synonymGroups: config.synonymGroups,
       }
     })
   )
@@ -673,7 +690,18 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
       const currentTags: string[] = (() => { try { const p = JSON.parse(rows[0].tags || '[]'); return Array.isArray(p) ? p : [] } catch { return [] } })()
 
       const mergedAliases = aliases ?? currentAliases
-      const mergedTags = tags ?? currentTags
+      let mergedTags = tags ?? currentTags
+
+      if (tags !== undefined) {
+        const allCandidates = new Set(
+          (config.synonymGroups || [])
+            .flatMap(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
+        )
+        const validTags = tags
+          .map(t => t.trim())
+          .filter(t => allCandidates.has(t))
+        mergedTags = validTags.slice(0, 1)
+      }
 
       await service.updateImageAnnotation(rows[0].id, mergedAliases, mergedTags)
       return { ok: true, aliases: mergedAliases, tags: mergedTags }
@@ -699,16 +727,29 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
     'memesluna/getTagSummary',
     withReady(async () => {
       const rows = await ctx.database.get('memesluna_images', {})
+      const rawSynonymGroups = config.synonymGroups || []
+      const synonymGroups = rawSynonymGroups.map(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
+
       const tagMap = new Map<string, { count: number; previewUrls: string[] }>()
 
       for (const row of rows) {
         let tags: string[] = []
         try { const p = JSON.parse(row.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
+        
+        // Find unique representatives for this image's tags to group them together
+        const imageReps = new Set<string>()
         for (const tag of tags) {
-          if (!tagMap.has(tag)) {
-            tagMap.set(tag, { count: 0, previewUrls: [] })
+          const rep = getTagRepresentative(tag, synonymGroups)
+          if (rep) {
+            imageReps.add(rep)
           }
-          const entry = tagMap.get(tag)!
+        }
+
+        for (const rep of imageReps) {
+          if (!tagMap.has(rep)) {
+            tagMap.set(rep, { count: 0, previewUrls: [] })
+          }
+          const entry = tagMap.get(rep)!
           entry.count++
           if (entry.previewUrls.length < 4) {
             const bp = config.backendPath || '/memesluna'
@@ -732,10 +773,15 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
       const matched: Array<{ collection: string; filename: string; tags: string[]; imageUrl: string }> = []
       const bp = config.backendPath || '/memesluna'
 
+      const rawSynonymGroups = config.synonymGroups || []
+      const synonymGroups = rawSynonymGroups.map(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
+      const targetGroup = synonymGroups.find(group => group[0]?.toLowerCase() === tag.toLowerCase())
+      const allowedTagsInGroup = targetGroup ? new Set(targetGroup.map(t => t.toLowerCase())) : new Set([tag.toLowerCase()])
+
       for (const row of rows) {
         let tags: string[] = []
         try { const p = JSON.parse(row.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
-        if (tags.some((t: string) => t.toLowerCase() === tag.toLowerCase())) {
+        if (tags.some((t: string) => allowedTagsInGroup.has(t.toLowerCase()))) {
           matched.push({
             collection: row.collection,
             filename: row.filename,

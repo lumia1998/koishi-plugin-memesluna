@@ -100,7 +100,7 @@ function getImageMimeFromBytes(buffer: Buffer): string {
 async function compressImageForAI(buffer: Buffer): Promise<{ buffer: Buffer; mimeType: string }> {
     const originalMime = getImageMimeFromBytes(buffer)
     // If it's already small and not a GIF, do not compress
-    if (buffer.length < 150 * 1024 && originalMime !== 'image/gif') {
+    if (buffer.length < 30 * 1024 && originalMime !== 'image/gif') {
         return { buffer, mimeType: originalMime }
     }
 
@@ -109,7 +109,7 @@ async function compressImageForAI(buffer: Buffer): Promise<{ buffer: Buffer; mim
         try {
             const compressed = await sharp(buffer)
                 .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
-                .jpeg({ quality: 80 })
+                .jpeg({ quality: 75 })
                 .toBuffer()
             return { buffer: compressed, mimeType: 'image/jpeg' }
         } catch (err) {
@@ -132,7 +132,7 @@ async function compressImageForAI(buffer: Buffer): Promise<{ buffer: Buffer; mim
                 img.free()
                 img = resized
             }
-            const jpegBytes = img.get_bytes_jpeg(80)
+            const jpegBytes = img.get_bytes_jpeg(75)
             img.free()
             return { buffer: Buffer.from(jpegBytes), mimeType: 'image/jpeg' }
         } catch (err) {
@@ -181,6 +181,32 @@ export class AIAnnotator {
                 Array.isArray(parsed.aliases) &&
                 Array.isArray(parsed.tags)
             ) {
+                const allCandidates = new Set(
+                    (this.config.synonymGroups || [])
+                        .flatMap(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
+                )
+                const validTags = parsed.tags
+                    .map(t => t.trim())
+                    .filter(t => allCandidates.has(t))
+                
+                if (validTags.length > 0) {
+                    parsed.tags = [validTags[0]]
+                } else {
+                    let found = false
+                    for (const alias of parsed.aliases) {
+                        for (const cand of allCandidates) {
+                            if (alias.includes(cand)) {
+                                parsed.tags = [cand]
+                                found = true
+                                break
+                            }
+                        }
+                        if (found) break
+                    }
+                    if (!found) {
+                        parsed.tags = []
+                    }
+                }
                 return parsed
             }
         }
@@ -194,6 +220,10 @@ export class AIAnnotator {
 
         // 替换 prompt 模板中的上下文变量
         let prompt = this.config.annotatePrompt
+        const allCandidates = (this.config.synonymGroups || [])
+            .flatMap(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
+        prompt = prompt.replaceAll('{{allowed_tags}}', allCandidates.join('、'))
+
         if (context) {
             prompt = prompt
                 .replaceAll('{{filename}}', context.filename || '')

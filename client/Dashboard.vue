@@ -529,11 +529,15 @@
                         <input
                           v-model="tagEditorInput"
                           class="flat-input tag-editor-input"
-                          placeholder="添加路由标签（如：可爱、震惊），回车添加"
+                          list="allowed-tags-list"
+                          placeholder="选择或输入唯一候选标签"
                           @keyup.enter="addTagFromEditor"
                           :disabled="tagEditorSaving || aiAnnotating"
                           style="flex-grow: 1;"
                         />
+                        <datalist id="allowed-tags-list">
+                          <option v-for="tag in allowedCandidates" :key="tag" :value="tag" />
+                        </datalist>
                         <button @click="addTagFromEditor" class="btn btn-secondary btn-small" :disabled="!tagEditorInput.trim() || tagEditorSaving || aiAnnotating">
                           添加
                         </button>
@@ -634,7 +638,8 @@
                         <input
                           v-model="bulkTagEditorInput"
                           class="flat-input tag-editor-input"
-                          placeholder="输入标签名，回车添加"
+                          list="allowed-tags-list"
+                          placeholder="选择或输入唯一候选标签"
                           @keyup.enter="addTagToBulkEditor"
                           :disabled="bulkTagEditorSaving"
                           style="flex-grow: 1;"
@@ -791,7 +796,7 @@
                     :key="item.id"
                     class="notion-gallery-card"
                     :class="{
-                      'notion-gallery-card-active-dropdown': item.type === 'local' && activeMoveDropdown === item.value,
+                      'notion-gallery-card-active-dropdown': activeCardMenu === item.value,
                       'selected': item.type === 'local' && isImageSelected(item.value),
                       'external': item.type === 'external'
                     }"
@@ -817,39 +822,52 @@
                         class="gallery-img"
                         loading="lazy"
                       />
-                      <!-- Tags at top-right of image -->
-                      <div v-if="item.type === 'local'" class="image-tag-corner">
-                        <span
-                          v-for="tag in getImageTags(item.value).slice(0, 5)"
-                          :key="tag"
-                          class="image-tag-badge"
-                          :style="{ backgroundColor: tagColor(tag) }"
-                        >{{ tag }}</span>
-                        <span v-if="getImageTags(item.value).length > 5" class="image-tag-badge more">+{{ getImageTags(item.value).length - 5 }}</span>
-                      </div>
                       <span class="image-format-badge" :class="item.type">{{ item.type === 'external' ? 'LINK' : getImageExtension(item.value) }}</span>
                     </div>
-                    <div class="gallery-list-meta">
-                      <div>{{ item.label }}</div>
-                    </div>
-                    <div v-if="item.type === 'local'" class="gallery-card-actions">
-                      <button @click.stop="openTagEditor(currentCollection.name, item.value)" class="card-action-btn">标签</button>
-                      <button @click.stop="toggleMoveDropdown(item.value)" class="card-action-btn move-dropdown-trigger">
-                        修改
-                        <div class="move-dropdown-menu-sm" v-show="activeMoveDropdown === item.value">
-                          <template v-for="targetCol in collections">
-                            <button v-if="targetCol.name !== currentCollection.name" :key="targetCol.name"
-                              @click.stop="moveImage(currentCollection.name, targetCol.name, item.value)" class="dropdown-item">
-                              → {{ targetCol.name }}
-                            </button>
-                          </template>
+                    <div class="gallery-card-info">
+                      <div class="gallery-card-header-row">
+                        <div class="gallery-card-title" :title="item.label">{{ item.label }}</div>
+                        <div class="gallery-card-menu-container">
+                          <button class="gallery-card-menu-btn" @click.stop="toggleCardMenu(item.value)" title="更多操作">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                              <circle cx="12" cy="12" r="1.5"></circle>
+                              <circle cx="19" cy="12" r="1.5"></circle>
+                              <circle cx="5" cy="12" r="1.5"></circle>
+                            </svg>
+                          </button>
+                          <!-- Dropdown menu -->
+                          <div class="gallery-card-menu-dropdown" v-show="activeCardMenu === item.value" @click.stop>
+                            <template v-if="item.type === 'local'">
+                              <button @click="openTagEditor(currentCollection.name, item.value); closeCardMenu()">编辑标签</button>
+                              <div v-if="collections.length > 1" class="gallery-card-submenu-trigger">
+                                <span>移动至表情包</span>
+                                <div class="gallery-card-submenu">
+                                  <template v-for="targetCol in collections">
+                                    <button v-if="targetCol.name !== currentCollection.name" :key="targetCol.name"
+                                      @click="moveImage(currentCollection.name, targetCol.name, item.value); closeCardMenu()">
+                                      {{ targetCol.name }}
+                                    </button>
+                                  </template>
+                                </div>
+                              </div>
+                              <button class="danger" @click="confirmDeleteImage(currentCollection.name, item.value); closeCardMenu()">删除图片</button>
+                            </template>
+                            <template v-else>
+                              <button @click="copyToClipboard(item.value); closeCardMenu()">复制链接</button>
+                              <button class="danger" @click="deleteExternalLink(currentCollection.name, item.value); closeCardMenu()">删除外链</button>
+                            </template>
+                          </div>
                         </div>
-                      </button>
-                      <button @click.stop="confirmDeleteImage(currentCollection.name, item.value)" class="card-action-btn danger">删除</button>
-                    </div>
-                    <div v-else class="gallery-card-actions">
-                      <button @click.stop="copyToClipboard(item.value)" class="card-action-btn">复制</button>
-                      <button @click.stop="deleteExternalLink(currentCollection.name, item.value)" class="card-action-btn danger">删除</button>
+                      </div>
+                      <div v-if="item.type === 'local'" class="gallery-card-tags">
+                        <span
+                          v-for="tag in getImageTags(item.value)"
+                          :key="tag"
+                          class="gallery-card-tag-badge"
+                          :style="{ backgroundColor: tagColor(tag) + '12', color: tagColor(tag), borderColor: tagColor(tag) + '22' }"
+                        >{{ tag }}</span>
+                        <span v-if="!getImageTags(item.value).length" class="gallery-card-tag-empty">暂无标签</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1472,6 +1490,10 @@ const baseUrl = ref('http://localhost:5140')
 const endpoints = ref<EndpointInfo[]>([])
 const collections = ref<CollectionInfo[]>([])
 const stagedImages = ref<StagedImageInfo[]>([])
+const synonymGroups = ref<string[]>([])
+const allowedCandidates = computed(() => {
+  return synonymGroups.value.flatMap(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
+})
 const stagingSearch = ref('')
 const stagingTargetCollection = ref<Record<string, string>>({})
 const stagingBusyId = ref('')
@@ -1549,8 +1571,12 @@ function openBulkTagEditor() {
 
 function addTagToBulkEditor() {
   const tag = bulkTagEditorInput.value.trim()
-  if (!tag || bulkTagEditorTags.value.includes(tag)) return
-  bulkTagEditorTags.value = [...bulkTagEditorTags.value, tag]
+  if (!tag) return
+  if (!allowedCandidates.value.includes(tag)) {
+    showToast('标签必须是同义词组候选列表中的一个', 'error')
+    return
+  }
+  bulkTagEditorTags.value = [tag]
   bulkTagEditorInput.value = ''
 }
 
@@ -1587,6 +1613,15 @@ async function saveBulkTagEditor() {
         const existingAliases = imageAliasesCache.value[key] || []
         finalTags = Array.from(new Set([...existingTags, ...finalTags]))
         finalAliases = Array.from(new Set([...existingAliases, ...finalAliases]))
+      }
+
+      // Restrict to at most 1 tag
+      if (finalTags.length > 1) {
+        if (bulkTagEditorTags.value.length > 0) {
+          finalTags = [bulkTagEditorTags.value[0]]
+        } else {
+          finalTags = [finalTags[0]]
+        }
       }
       
       await send('memesluna/updateImageMetadata', {
@@ -1662,8 +1697,12 @@ async function openTagEditor(collection: string, filename: string) {
 
 async function addTagFromEditor() {
   const tag = tagEditorInput.value.trim()
-  if (!tag || tagEditorTags.value.includes(tag)) return
-  tagEditorTags.value = [...tagEditorTags.value, tag]
+  if (!tag) return
+  if (!allowedCandidates.value.includes(tag)) {
+    showToast('标签必须是同义词组候选列表中的一个', 'error')
+    return
+  }
+  tagEditorTags.value = [tag]
   tagEditorInput.value = ''
   await saveTagEditor()
 }
@@ -1738,6 +1777,7 @@ function closeTagEditor() {
 }
 
 const activeMoveDropdown = ref<string | null>(null)
+const activeCardMenu = ref<string | null>(null)
 
 function toggleMoveDropdown(img: string) {
   if (activeMoveDropdown.value === img) {
@@ -1745,6 +1785,18 @@ function toggleMoveDropdown(img: string) {
   } else {
     activeMoveDropdown.value = img
   }
+}
+
+function toggleCardMenu(img: string) {
+  if (activeCardMenu.value === img) {
+    activeCardMenu.value = null
+  } else {
+    activeCardMenu.value = img
+  }
+}
+
+function closeCardMenu() {
+  activeCardMenu.value = null
 }
 
 function isImageSelected(img: string): boolean {
@@ -2168,6 +2220,7 @@ async function fetchState() {
       endpoints.value = Array.isArray(state.endpoints) ? state.endpoints : []
       collections.value = Array.isArray(state.collections) ? state.collections : []
       stagedImages.value = Array.isArray(state.stagedImages) ? state.stagedImages : []
+      if (Array.isArray(state.synonymGroups)) synonymGroups.value = state.synonymGroups
       warmCollectionPreviews()
     }
   } catch (err) {
@@ -2788,6 +2841,7 @@ function toggleCollectionMenu(name: string) {
 const closeDropdowns = () => {
   activeMoveDropdown.value = null
   activeCollectionMenu.value = null
+  activeCardMenu.value = null
 }
 
 // Lifecycle Hooks
@@ -4240,8 +4294,15 @@ watch(currentTagView, (newTag) => {
   background: rgba(13, 148, 136, 0.82);
 }
 
-.gallery-list-meta {
-  display: none;
+.gallery-card-info {
+  padding: 10px 12px;
+  background: var(--k-bg-card, #fff);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .notion-gallery-grid.list-mode {
@@ -4265,144 +4326,171 @@ watch(currentTagView, (newTag) => {
   height: 68px;
 }
 
-.notion-gallery-grid.list-mode .gallery-list-meta {
-  display: block;
-  min-width: 0;
-  padding-right: 88px;
+.notion-gallery-grid.list-mode .gallery-card-info {
+  padding: 0;
+  background: transparent;
 }
 
-.gallery-list-meta div {
-  color: var(--k-text-normal, #111827);
+.gallery-card-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  position: relative;
+}
+
+.gallery-card-title {
   font-size: 0.82rem;
-  font-weight: 650;
+  font-weight: 600;
+  color: var(--k-text-normal, #111827);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.gallery-list-meta span {
-  display: block;
-  margin-top: 4px;
-  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
-  font-size: 0.72rem;
-}
-
-/* Hover overlay on top of square image card */
-/* Tags at top-right of image */
-.image-tag-corner {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
-  justify-content: flex-end;
-  z-index: 5;
-  pointer-events: none;
-}
-
-.image-tag-badge {
-  font-size: 0.6rem;
-  font-weight: 600;
-  color: #fff;
-  padding: 1px 6px;
-  border-radius: 3px;
-  white-space: nowrap;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.3);
-}
-
-.image-tag-badge.more {
-  background: rgba(0,0,0,0.45) !important;
-  text-shadow: none;
-}
-
-/* Action buttons at bottom of card */
-.gallery-card-actions {
-  display: flex;
-  gap: 1px;
-  border-top: 1px solid var(--k-color-border, rgba(55,53,47,0.08));
-  background: var(--k-bg-card, #fff);
-}
-
-.notion-gallery-grid:not(.list-mode) .gallery-card-actions {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out;
-  transform: translateY(4px);
-  z-index: 10;
-}
-
-.notion-gallery-grid:not(.list-mode) .notion-gallery-card:hover .gallery-card-actions,
-.notion-gallery-grid:not(.list-mode) .notion-gallery-card-active-dropdown .gallery-card-actions {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
-}
-
-.gallery-card-actions .card-action-btn {
   flex: 1;
-  border: none;
+  min-width: 0;
+}
+
+.gallery-card-menu-container {
+  position: relative;
+  display: inline-flex;
+}
+
+.gallery-card-menu-btn {
   background: transparent;
-  color: var(--k-text-muted, rgba(55,53,47,0.5));
-  font-size: 0.7rem;
-  padding: 6px 4px;
+  border: none;
   cursor: pointer;
-  font-weight: 500;
-  transition: all 0.1s ease;
-  text-align: center;
-  position: relative;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.45));
+  padding: 0;
+  transition: background 0.1s ease, color 0.1s ease;
 }
 
-.gallery-card-actions .card-action-btn:hover {
-  background: var(--k-bg-panel, rgba(55,53,47,0.04));
-  color: var(--k-text-normal, #37352f);
+.gallery-card-menu-btn:hover {
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.05));
+  color: var(--k-text-normal, #111827);
 }
 
-.gallery-card-actions .card-action-btn.danger:hover {
-  background: rgba(235,87,87,0.08);
-  color: #eb5757;
+.gallery-card-menu-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
-/* Move dropdown in action bar */
-.move-dropdown-trigger {
-  position: relative;
-}
-
-.move-dropdown-menu-sm {
+/* Card Dropdown Menu */
+.gallery-card-menu-dropdown {
   position: absolute;
   bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #fff;
-  border: 1px solid rgba(55,53,47,0.1);
+  right: 0;
+  margin-bottom: 6px;
+  min-width: 130px;
+  background-color: var(--k-bg-card, #ffffff);
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.15));
   border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-  padding: 4px;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.12);
   z-index: 50;
-  white-space: nowrap;
-  min-width: 120px;
-  margin-bottom: 4px;
+  padding: 4px;
 }
 
-.move-dropdown-menu-sm .dropdown-item {
-  display: block;
+.gallery-card-menu-dropdown button {
   width: 100%;
   border: none;
   background: transparent;
-  padding: 5px 10px;
-  font-size: 0.75rem;
-  color: #37352f;
-  cursor: pointer;
-  border-radius: 4px;
   text-align: left;
+  padding: 6px 10px;
+  font-size: 0.76rem;
+  cursor: pointer;
+  color: var(--k-text-normal, #37352f);
+  border-radius: 4px;
+  font-weight: 500;
+  transition: background 0.1s ease;
 }
 
-.move-dropdown-menu-sm .dropdown-item:hover {
-  background: rgba(55,53,47,0.06);
+.gallery-card-menu-dropdown button:hover {
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.05));
+}
+
+.gallery-card-menu-dropdown button.danger {
+  color: var(--k-color-danger, #eb5757);
+}
+
+.gallery-card-menu-dropdown button.danger:hover {
+  background-color: var(--memesluna-danger-soft-bg);
+}
+
+/* Card Submenu for moving */
+.gallery-card-submenu-trigger {
+  position: relative;
+}
+
+.gallery-card-submenu-trigger span {
+  display: block;
+  padding: 6px 10px;
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--k-text-normal, #37352f);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.1s ease;
+}
+
+.gallery-card-submenu-trigger:hover > span {
+  background-color: var(--k-bg-button-hover, rgba(55, 53, 47, 0.05));
+}
+
+.gallery-card-submenu {
+  position: absolute;
+  bottom: 0;
+  right: 100%;
+  margin-right: 6px;
+  min-width: 120px;
+  max-height: 180px;
+  overflow-y: auto;
+  background-color: var(--k-bg-card, #ffffff);
+  border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.15));
+  border-radius: 6px;
+  box-shadow: 0 4px 15px rgba(15, 23, 42, 0.1);
+  padding: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+}
+
+.gallery-card-submenu-trigger:hover .gallery-card-submenu {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.gallery-card-submenu button {
+  padding: 5px 8px;
+  font-size: 0.72rem;
+}
+
+/* Tags in the card */
+.gallery-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 20px;
+  align-items: center;
+}
+
+.gallery-card-tag-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.gallery-card-tag-empty {
+  font-size: 0.68rem;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.35));
+  font-style: italic;
 }
 
 /* Notion Inputs/Select/Textarea inputs */
