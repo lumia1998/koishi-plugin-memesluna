@@ -170,6 +170,7 @@
                 v-for="item in filteredCollections"
                 :key="item.name"
                 class="folder-card"
+                :class="{ 'folder-card-active-menu': activeCollectionMenu === item.name }"
                 @click="enterCollectionDetail(item)"
               >
                 <div :class="['folder-cover', getCollectionCardPreviewImages(item.name).length ? 'has-preview' : 'empty']">
@@ -3216,6 +3217,11 @@ watch(currentTagView, (newTag) => {
   flex-direction: column;
   min-width: 0;
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+}
+
+.folder-card-active-menu {
+  overflow: visible !important;
+  z-index: 60 !important;
 }
 
 .folder-card:hover {
