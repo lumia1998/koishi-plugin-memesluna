@@ -1125,7 +1125,10 @@ export class MemesLunaService extends Service {
     const fingerprints = await this.getImageFingerprints(buffer)
     const duplicate = await this.getDuplicateImageByHash(fingerprints.hash, { includeStaged: false, includeImages: true, collection: collectionName })
     if (duplicate) {
-      throw new Error('Duplicate image already exists: ' + duplicate)
+      const parts = duplicate.split('/')
+      if (parts.length === 2) {
+        await this.deleteImageFromCollection(parts[0], parts[1])
+      }
     }
 
     // Determine the next index
