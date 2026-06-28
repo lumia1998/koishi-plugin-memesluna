@@ -240,15 +240,24 @@
                   class="folder-card"
                   @click="filterByTag(item.tag)"
                 >
-                  <div class="folder-cover preview-count-4">
-                    <template v-if="item.previewUrls.length">
+                  <!-- 少于6张：单图居中拉伸；6张及以上：6宫格展示 -->
+                  <div :class="['folder-cover', item.previewUrls.length === 0 ? 'empty' : item.previewUrls.length < 6 ? 'tag-cover-single has-preview' : 'tag-cover-grid has-preview']">
+                    <template v-if="item.previewUrls.length > 0">
                       <img
-                        v-for="(src, idx) in item.previewUrls.slice(0, 4)"
-                        :key="idx"
-                        :src="src"
-                        class="folder-cover-img"
+                        v-if="item.previewUrls.length < 6"
+                        :src="item.previewUrls[0]"
+                        class="folder-cover-img tag-cover-single-img"
                         loading="lazy"
                       />
+                      <template v-else>
+                        <img
+                          v-for="(src, idx) in item.previewUrls.slice(0, 6)"
+                          :key="idx"
+                          :src="src"
+                          class="folder-cover-img"
+                          loading="lazy"
+                        />
+                      </template>
                     </template>
                     <div v-else class="folder-cover-empty">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -257,11 +266,17 @@
                       </svg>
                     </div>
                   </div>
-                  <div class="folder-body">
+                  <div class="folder-body tag-card-body">
                     <div class="folder-title-row">
-                      <div class="folder-name">{{ item.tag }}</div>
+                      <div class="tag-synonym-names">
+                        <span
+                          v-for="(word, wi) in item.synonymWords"
+                          :key="wi"
+                          :class="['tag-synonym-chip', `tag-color-${(item.groupIndex >= 0 ? item.groupIndex : 0) % 8}`]"
+                        >{{ word }}</span>
+                      </div>
                     </div>
-                    <div class="folder-info-row">
+                    <div class="folder-info-row" style="margin-top: 6px;">
                       <div class="folder-count">{{ item.count }} 张图片</div>
                     </div>
                   </div>
@@ -1444,7 +1459,7 @@ const activeMenu = ref<'resources' | 'distribution' | 'staging' | 'settings'>((s
 const activeResourceView = ref<'collection' | 'tag'>((sessionStorage.getItem('memesluna_active_resource_view') as any) || 'collection')
 
 // Tag summary data
-const tagSummary = ref<{ tag: string; count: number; previewUrls: string[] }[]>([])
+const tagSummary = ref<{ tag: string; count: number; previewUrls: string[]; groupIndex: number; synonymWords: string[] }[]>([])
 const tagSummaryLoading = ref(false)
 
 async function switchToTagView() {
@@ -2662,24 +2677,17 @@ async function uploadFiles(files: FileList) {
     return
   }
 
-  showToast(`正在转码并上传 ${uploadableFiles.length} 张表情图片...`, 'info')
+  showToast(`正在上传 ${uploadableFiles.length} 张表情图片...`, 'info')
 
   try {
-    const payloadImages = []
+    const formData = new FormData()
     for (const file of uploadableFiles) {
-      const base64 = await fileToBase64(file)
-      payloadImages.push({
-        base64,
-        originalName: file.name
-      })
+      formData.append('images', file)
     }
 
     const response = await fetch(`${getBackendBaseUrl()}/api/admin/collections/${encodeURIComponent(currentCollection.value.name)}/images`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ images: payloadImages })
+      body: formData
     })
 
     if (response.ok) {
@@ -3213,8 +3221,6 @@ watch(currentTagView, (newTag) => {
   overflow: hidden;
   cursor: pointer;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
-  display: flex;
-  flex-direction: column;
   min-width: 0;
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
 }
@@ -3285,12 +3291,76 @@ watch(currentTagView, (newTag) => {
 }
 
 .folder-body {
-  padding: 15px 16px 16px;
-  flex: 1;
+  padding: 13px 16px 14px;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  min-height: 108px;
+}
+
+.tag-card-body {
+  padding: 10px 14px 12px;
+}
+
+/* Tag cover: single image centered & stretched */
+.folder-cover.tag-cover-single {
+  display: block;
+  position: relative;
+}
+
+.folder-cover.tag-cover-single .tag-cover-single-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Tag cover: 6-grid layout */
+.folder-cover.tag-cover-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+}
+
+/* Synonym word chips in tag card title */
+.tag-synonym-names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tag-synonym-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+
+/* 8 rotating color classes for tag groups */
+.tag-color-0 { background: rgba(52, 168, 83, 0.12); color: #1a7a3c; }
+.tag-color-1 { background: rgba(66, 133, 244, 0.12); color: #1a56c4; }
+.tag-color-2 { background: rgba(251, 188, 5, 0.14); color: #8a6000; }
+.tag-color-3 { background: rgba(234, 67, 53, 0.12); color: #b92a1a; }
+.tag-color-4 { background: rgba(153, 50, 204, 0.12); color: #7218a0; }
+.tag-color-5 { background: rgba(0, 188, 212, 0.12); color: #007a8a; }
+.tag-color-6 { background: rgba(255, 111, 0, 0.12); color: #b84c00; }
+.tag-color-7 { background: rgba(33, 150, 243, 0.10); color: #0d6dbd; }
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+  .tag-color-0 { background: rgba(52, 168, 83, 0.18); color: #6bcf8a; }
+  .tag-color-1 { background: rgba(66, 133, 244, 0.18); color: #7ab3ff; }
+  .tag-color-2 { background: rgba(251, 188, 5, 0.18); color: #f5c842; }
+  .tag-color-3 { background: rgba(234, 67, 53, 0.18); color: #ff7a6e; }
+  .tag-color-4 { background: rgba(153, 50, 204, 0.18); color: #c580e8; }
+  .tag-color-5 { background: rgba(0, 188, 212, 0.18); color: #5ddff5; }
+  .tag-color-6 { background: rgba(255, 111, 0, 0.18); color: #ffa050; }
+  .tag-color-7 { background: rgba(33, 150, 243, 0.18); color: #6bbaff; }
 }
 
 .folder-title-row {

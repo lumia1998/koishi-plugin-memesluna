@@ -53,70 +53,68 @@ export const Config: Schema<Config> = Schema.intersect([
   Schema.object({
     backendPath: Schema.string()
       .default('/memesluna')
-      .description('后端服务路径前缀'),
+      .description('插件 HTTP 路由的前缀路径，默认 /memesluna，修改后需重启'),
     selfUrl: Schema.string()
       .default('')
-      .description('服务公开地址，不填则优先使用 server.selfUrl'),
+      .description('插件对外暴露的完整地址（含协议和端口），留空则自动使用 Koishi server.selfUrl'),
     injectVariables: Schema.boolean()
       .default(true)
-      .description('是否向 ChatLuna 注入 {{endpoint}} 和 {{memesluna}} 变量'),
+      .description('开启后向 ChatLuna 注入 {{endpoint}} 路由列表和 {{memesluna}} 使用说明，让 AI 能发图'),
     variableRefreshIntervalMs: Schema.number()
       .min(30 * 1000)
       .max(60 * 60 * 1000)
       .default(5 * 60 * 1000)
-      .description('变量刷新间隔（毫秒）'),
+      .description('ChatLuna 变量自动刷新间隔（毫秒），新增合集或路由后最多等待这么久才生效'),
     injectVariablesPrompt: Schema.string()
       .role('textarea')
-      .default(`你可以使用表情包来丰富你的回复。可用的表情包合集如下：
+      .default(`你可以根据自己当前的心情或者动作从标签中选择合适的表情发送，也可以根据需要选择合适的表情包合集或端点。
+
+可用的路由如下：
 
 {endpoint}
 
-使用方法：
-- 合集名路由：{base_url}/memesluna/合集名 自动随机返回该合集的图片
-- 标签名路由：{base_url}/memesluna/标签名 按标签跨合集随机返回图片（可用标签如：{tags}）
-- 合集搜索：{base_url}/memesluna/合集名?q=关键词 在合集中按语义搜索
-- 特定图片路由：{base_url}/memesluna/合集名/图片名.后缀（例如：如果合集 kipfel 里有图片 1.jpg，可以输出 {base_url}/memesluna/kipfel/1.jpg）
-
-重要输出要求：
-1. 请直接输出图片地址（URL 链接），绝对不要使用 Markdown 图片语法，也不要任何前缀或描述包装。
-2. 例如：如果你想发送“开心”标签下的表情包，请在回复中直接包含 {base_url}/memesluna/开心 这样的纯文本链接，而不要写成 ![开心]({base_url}/memesluna/开心)。
-3. 合集名和标签名不要重名，合集优先匹配。只使用上面列出的合集名和标签名，不要自己编造路径。`)
-      .description('注入到 ChatLuna {{memesluna}} 变量的提示词模板，支持 {endpoint}、{base_url} 和 {tags} 占位符'),
+使用规则：
+- 直接将路径拼接到 {base_url} 后即可，例如 {base_url}/memesluna/开心
+- 合集名和标签名不要重名，合集优先匹配
+- 只使用上面列出的名称，不要自己编造路径
+- 标签路由按情绪跨合集随机返图，合集路由在指定合集内随机，端点路由转发到外部图源
+- 合集搜索：{base_url}/memesluna/合集名?q=关键词 可按语义搜索指定合集`)
+      .description('注入 ChatLuna 的提示词模板，支持占位符：{endpoint}（路由列表）、{base_url}（服务地址）、{tags}（所有可用标签）'),
   }).description('基础配置'),
 
   Schema.object({
     autoCollect: Schema.boolean()
       .default(false)
-      .description('是否自动监听群聊里的高频图片并放入暂缓区'),
+      .description('开启后自动监听群聊消息，高频出现的图片会自动进入暂缓区等待审核'),
     whitelistGroups: Schema.array(Schema.string())
       .role('table')
       .default([])
-      .description('自动暂存群白名单。不填表示监听所有群，填写后仅这些群会参与高频图片统计'),
+      .description('自动暂存白名单群号，留空表示监听所有群；填写后只有这些群的图片会被统计'),
     emojiFrequencyWindowMinutes: Schema.number()
       .min(1)
       .max(1440)
       .default(10)
-      .description('频率统计时间窗口（分钟）'),
+      .description('高频统计的时间窗口（分钟），窗口内同一张图出现次数超过阈值才触发暂存'),
     emojiFrequencyThreshold: Schema.number()
       .min(1)
       .max(50)
       .default(3)
-      .description('在统计窗口内同一图片出现多少次后放入暂缓区'),
+      .description('同一张图在统计窗口内出现几次后放入暂缓区'),
     minEmojiSize: Schema.number()
       .min(1)
       .max(1024)
       .default(50)
-      .description('自动暂存图片最小大小（KB）'),
+      .description('自动暂存的图片最小体积（KB），低于此大小的图片会被忽略'),
     maxEmojiSize: Schema.number()
       .min(1)
       .max(100)
       .default(15)
-      .description('自动暂存图片最大大小（MB）'),
+      .description('自动暂存的图片最大体积（MB），超过此大小的图片会被忽略'),
     groupAutoCollectLimit: Schema.number()
       .min(1)
       .max(5000)
       .default(300)
-      .description('每个群每天最多自动放入暂缓区的图片数量'),
+      .description('每个群每天最多触发自动暂存的图片数量上限，防止刷屏导致暂缓区过大'),
   }).description('自动暂存配置'),
 
   Schema.object({
@@ -126,24 +124,24 @@ export const Config: Schema<Config> = Schema.intersect([
       .step(0.01)
       .role('slider')
       .default(0.9)
-      .description('暂缓区相似图片筛选阈值，只用于聚类展示，不会自动删除图片'),
+      .description('暂缓区相似图片聚合阈值（0~1），越高越严格，仅用于管理界面分组展示，不会自动删除'),
     stagingRetentionDays: Schema.number()
       .min(0)
       .max(365)
       .default(0)
-      .description('暂缓区图片自动清理天数，0 表示永不自动清理'),
-  }).description('暂缓区复核配置'),
+      .description('暂缓区图片自动过期天数，0 表示永久保留不自动清理'),
+  }).description('暂缓区配置'),
 
   Schema.object({
     model: Schema.dynamic('model')
-      .description('用于 AI 标注的模型'),
+      .description('AI 标注使用的模型，需已在 ChatLuna 中配置'),
     autoAnnotate: Schema.boolean()
       .default(false)
-      .description('上传图片时是否自动进行 AI 语义标注'),
+      .description('上传图片时自动触发 AI 语义标注（生成 tags 和 aliases），需先配置模型'),
     annotatePrompt: Schema.string()
       .role('textarea')
       .default(DEFAULT_ANNOTATE_PROMPT)
-      .description('AI 标注提示词模板，要求输出 aliases 和 tags 两个字段的 JSON'),
+      .description('AI 标注的 System 提示词，要求模型输出 { aliases: string[], tags: string[] } 格式 JSON'),
     synonymGroups: Schema.array(Schema.string())
       .role('table')
       .default([
@@ -163,19 +161,19 @@ export const Config: Schema<Config> = Schema.intersect([
         '害怕,发抖,瑟瑟发抖,惊恐,怂,慌张',
         '求求,拜托,求你,拜托了',
       ])
-      .description('搜索同义词组，每行填写一组同义词，词与词之间用逗号（, 或 ，）隔开'),
+      .description('同义词分组，每行一组，组内用逗号（, 或 ，）分隔；同组词会被合并为同一标签，也用于标签路由的跨词匹配'),
     aiConcurrency: Schema.number()
       .min(1).max(10).default(2)
-      .description('AI 标注并发数'),
+      .description('AI 标注的并发请求数，越大速度越快但对模型负载更高'),
     aiBatchDelay: Schema.number()
       .min(0).max(5000).default(500)
-      .description('AI 批次间延迟（毫秒）'),
+      .description('批量标注时每张图之间的等待时间（毫秒），用于避免触发模型限流'),
     aiMaxAttempts: Schema.number()
       .min(1).max(10).default(3)
-      .description('AI 标注最大重试次数'),
+      .description('AI 标注失败后的最大重试次数'),
     aiBackoffBase: Schema.number()
       .min(100).max(10000).default(1000)
-      .description('AI 重试退避基数（毫秒）'),
+      .description('重试退避基数（毫秒），每次重试等待时间 = 基数 × 重试次数'),
   }).description('AI 标注配置'),
 ]) as Schema<Config>
 

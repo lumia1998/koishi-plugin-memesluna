@@ -151,7 +151,7 @@ export interface CollectionInfo {
 }
 
 export interface CollectionResource {
-  type: 'local' | 'external' | 'storage'
+  type: 'local' | 'external'
   filename?: string
   value: string
   public_url?: string
@@ -244,6 +244,44 @@ export class MemesLunaService extends Service {
     return this._annotator
   }
 
+  /**
+   * 将已存在于数据库的图片行推入 AI 标注队列（异步执行，不阻塞调用方）
+   * 供 .stole 命令在偷图成功后调用
+   */
+  async queueAnnotation(rows: any[]): Promise<void> {
+    if (!this._annotator || !rows.length) return
+    const concurrency = this.config.aiConcurrency || 2
+    const queue = [...rows]
+
+    const worker = async () => {
+      while (queue.length > 0) {
+        const row = queue.shift()
+        if (!row) break
+        try {
+          const image = await this.getLocalImageBuffer(row.collection, row.filename)
+          if (!image) continue
+          const result = await this._annotator!.annotate(image.buffer, {
+            filename: row.filename,
+            collectionName: row.collection,
+            imageUrl: `${this.config.backendPath}/${encodeURIComponent(row.collection)}/${encodeURIComponent(row.filename)}`,
+          })
+          if (result) {
+            await this.updateImageAnnotation(row.id, result.aliases, result.tags)
+          }
+          if (queue.length > 0 && this.config.aiBatchDelay > 0) {
+            await new Promise((resolve) => setTimeout(resolve, this.config.aiBatchDelay))
+          }
+        } catch (err) {
+          this.ctx.logger('memesluna').warn(`queueAnnotation failed for ${row.filename}:`, err)
+        }
+      }
+    }
+
+    const workers = Array(Math.min(concurrency, rows.length)).fill(null).map(() => worker())
+    await Promise.all(workers)
+  }
+
+
   private defineDatabase() {
     this.ctx.database.extend(
       'memesluna_endpoints',
@@ -323,13 +361,6 @@ export class MemesLunaService extends Service {
     return path.join(this.getStorageRoot(), '.staging')
   }
 
-  private getStorageBackend() {
-    if (this.ctx.chatluna_storage && (this.ctx.chatluna_storage as any).storageBackend) {
-      return (this.ctx.chatluna_storage as any).storageBackend
-    }
-    return null
-  }
-
   private async syncExistingFilesToDatabase() {
     const root = this.getStorageRoot()
     let folders: string[] = []
@@ -338,6 +369,18 @@ export class MemesLunaService extends Service {
       folders = entries.filter((e) => e.isDirectory() && this.isValidCollectionName(e.name)).map((e) => e.name)
     } catch {
       return
+    }
+
+    const foldersSet = new Set(folders)
+    try {
+      const allDbImages = await this.ctx.database.get('memesluna_images', {}, ['collection'])
+      const dbCollections = new Set(allDbImages.map((img) => img.collection))
+      const missingCollections = Array.from(dbCollections).filter((col) => !foldersSet.has(col))
+      if (missingCollections.length > 0) {
+        await this.ctx.database.remove('memesluna_images', { collection: missingCollections })
+      }
+    } catch (err) {
+      this.ctx.logger('memesluna').warn('Failed to cleanup missing collections from database:', err)
     }
 
     await Promise.all(folders.map(async (colName) => {
@@ -521,16 +564,6 @@ export class MemesLunaService extends Service {
       }
     }
 
-    if (row.type === 'storage') {
-      const backend = this.getStorageBackend()
-      if (!backend) return null
-      try {
-        return await backend.download(row.value)
-      } catch {
-        return null
-      }
-    }
-
     return null
   }
 
@@ -584,7 +617,7 @@ export class MemesLunaService extends Service {
 
   async getDuplicateImageByHash(
     hash: string,
-    options: { includeStaged?: boolean; includeImages?: boolean; ignoreStagedId?: string } = {}
+    options: { includeStaged?: boolean; includeImages?: boolean; ignoreStagedId?: string; collection?: string } = {}
   ): Promise<string | null> {
     if (!hash) return null
 
@@ -600,7 +633,11 @@ export class MemesLunaService extends Service {
     }
 
     if (includeImages) {
-      const imageRows = await this.ctx.database.get('memesluna_images', { hash }, { limit: 1 })
+      const query: any = { hash }
+      if (options.collection) {
+        query.collection = options.collection
+      }
+      const imageRows = await this.ctx.database.get('memesluna_images', query, { limit: 1 })
       if (imageRows.length) {
         const image = imageRows[0]
         return `${image.collection}/${image.filename}`
@@ -783,6 +820,7 @@ export class MemesLunaService extends Service {
     const dir = this.getCollectionDir(collectionName)
     try {
       await fs.rm(dir, { recursive: true, force: true })
+      await this.ctx.database.remove('memesluna_images', { collection: collectionName })
       return true
     } catch {
       return false
@@ -865,18 +903,6 @@ export class MemesLunaService extends Service {
     }
 
     const image = rows[0]
-    if (image.type === 'storage') {
-      const backend = this.getStorageBackend()
-      if (backend) {
-        try {
-          const buffer = await backend.download(image.value)
-          return { buffer, mime: image.mime }
-        } catch {
-          return null
-        }
-      }
-    }
-
     if (image.type === 'external') {
       try {
         const buffer = await this.ctx.http.get<ArrayBuffer>(image.value, { responseType: 'arraybuffer' })
@@ -913,7 +939,7 @@ export class MemesLunaService extends Service {
       return []
     }
 
-    const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName, type: ['local', 'storage'] })
+    const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName, type: 'local' })
     return rows.map((img) => img.filename).sort()
   }
 
@@ -1082,7 +1108,7 @@ export class MemesLunaService extends Service {
     }
 
     const fingerprints = await this.getImageFingerprints(buffer)
-    const duplicate = await this.getDuplicateImageByHash(fingerprints.hash, { includeStaged: false, includeImages: true })
+    const duplicate = await this.getDuplicateImageByHash(fingerprints.hash, { includeStaged: false, includeImages: true, collection: collectionName })
     if (duplicate) {
       throw new Error('Duplicate image already exists: ' + duplicate)
     }
@@ -1102,42 +1128,22 @@ export class MemesLunaService extends Service {
     const finalName = await this.deduplicateDatabaseFilename(collectionName, safeBase)
 
     const id = randomUUID()
-    const backend = this.getStorageBackend()
-    if (backend) {
-      // S3/WebDAV upload
-      const result = await backend.upload(buffer, finalName)
-      await this.ctx.database.create('memesluna_images', {
-        id,
-        collection: collectionName,
-        index,
-        filename: finalName,
-        type: 'storage',
-        value: result.key,
-        public_url: result.publicUrl || '',
-        mime: this.getMimeByFilename(finalName),
-        ...fingerprints,
-        aliases: '[]',
-        tags: '[]',
-        created_at: new Date(),
-      })
-    } else {
-      // Local upload
-      const dir = this.getCollectionDir(collectionName)
-      await fs.writeFile(path.join(dir, finalName), buffer)
-      await this.ctx.database.create('memesluna_images', {
-        id,
-        collection: collectionName,
-        index,
-        filename: finalName,
-        type: 'local',
-        value: finalName,
-        mime: this.getMimeByFilename(finalName),
-        ...fingerprints,
-        aliases: '[]',
-        tags: '[]',
-        created_at: new Date(),
-      })
-    }
+    // Local upload
+    const dir = this.getCollectionDir(collectionName)
+    await fs.writeFile(path.join(dir, finalName), buffer)
+    await this.ctx.database.create('memesluna_images', {
+      id,
+      collection: collectionName,
+      index,
+      filename: finalName,
+      type: 'local',
+      value: finalName,
+      mime: this.getMimeByFilename(finalName),
+      ...fingerprints,
+      aliases: '[]',
+      tags: '[]',
+      created_at: new Date(),
+    })
 
     if (this._annotator && this.config.autoAnnotate) {
       this._annotator.annotate(buffer, {
@@ -1152,146 +1158,7 @@ export class MemesLunaService extends Service {
     return finalName
   }
 
-  async addLocalImageBase64(
-    collectionName: string,
-    base64Data: string,
-    originalName?: string
-  ): Promise<string> {
-    const { base64, extHint } = this.normalizeBase64(base64Data)
-    const buffer = Buffer.from(base64, 'base64')
-    return this.addLocalImageBuffer(collectionName, buffer, originalName, extHint)
-  }
 
-  async addLocalImagesBase64(
-    collectionName: string,
-    images: Array<{ base64Data: string; originalName?: string }>
-  ): Promise<string[]> {
-    this.ensureCollectionName(collectionName)
-    if (!(await this.collectionExists(collectionName))) {
-      throw new Error(`Collection not found: ${collectionName}`)
-    }
-
-    const maxImg = await this.ctx.database.get('memesluna_images', { collection: collectionName }, { limit: 1, sort: { index: 'desc' } })
-    let nextIndex = maxImg.length ? maxImg[0].index + 1 : 1
-
-    const backend = this.getStorageBackend()
-    const results: string[] = []
-
-    // Parse base64 and run in parallel to load files and get fingerprints
-    const processPromises = images.map(async (img) => {
-      const { base64, extHint } = this.normalizeBase64(img.base64Data)
-      const buffer = Buffer.from(base64, 'base64')
-      if (!buffer.length) {
-        throw new Error('Invalid image payload')
-      }
-
-      const fingerprints = await this.getImageFingerprints(buffer)
-      const duplicate = await this.getDuplicateImageByHash(fingerprints.hash, { includeStaged: false, includeImages: true })
-      if (duplicate) {
-        throw new Error('Duplicate image already exists: ' + duplicate)
-      }
-
-      const rawExt = (path.parse(img.originalName ?? '').ext || (extHint ? `.${extHint}` : '') || '.png').toLowerCase()
-      const finalExt = rawExt === '.jpeg' ? '.jpg' : rawExt
-      if (!IMAGE_EXTENSIONS.has(finalExt)) {
-        throw new Error('Unsupported image format')
-      }
-
-      const baseName = img.originalName ? path.basename(img.originalName, path.extname(img.originalName)) : `image-${Date.now()}`
-      const safeBase = sanitizeFilename(`${baseName}${finalExt}`)
-
-      return {
-        buffer,
-        fingerprints,
-        safeBase,
-      }
-    })
-
-    const processed = await Promise.all(processPromises)
-
-    // Write files and insert into database
-    const databaseRows: any[] = []
-    for (const p of processed) {
-      const index = nextIndex++
-      const finalName = await this.deduplicateDatabaseFilename(collectionName, p.safeBase)
-
-      if (backend) {
-        const result = await backend.upload(p.buffer, finalName)
-        databaseRows.push({
-          id: randomUUID(),
-          collection: collectionName,
-          index,
-          filename: finalName,
-          type: 'storage',
-          value: result.key,
-          public_url: result.publicUrl || '',
-          mime: this.getMimeByFilename(finalName),
-          ...p.fingerprints,
-          aliases: '[]',
-          tags: '[]',
-          created_at: new Date(),
-        })
-      } else {
-        const dir = this.getCollectionDir(collectionName)
-        await fs.writeFile(path.join(dir, finalName), p.buffer)
-        databaseRows.push({
-          id: randomUUID(),
-          collection: collectionName,
-          index,
-          filename: finalName,
-          type: 'local',
-          value: finalName,
-          mime: this.getMimeByFilename(finalName),
-          ...p.fingerprints,
-          aliases: '[]',
-          tags: '[]',
-          created_at: new Date(),
-        })
-      }
-      results.push(finalName)
-    }
-
-    // Insert database rows in parallel
-    await Promise.all(databaseRows.map((row) => this.ctx.database.create('memesluna_images', row)))
-
-    if (this._annotator && this.config.autoAnnotate) {
-      const concurrency = this.config.aiConcurrency || 2
-      const queue = processed.map((p, i) => ({
-        buf: p.buffer,
-        rowId: databaseRows[i].id,
-        imgFilename: databaseRows[i].filename
-      }))
-
-      const worker = async () => {
-        while (queue.length > 0) {
-          const item = queue.shift()
-          if (!item) break
-          try {
-            const result = await this._annotator!.annotate(item.buf, {
-              filename: item.imgFilename,
-              collectionName,
-              imageUrl: `${this.config.backendPath}/${encodeURIComponent(collectionName)}/${encodeURIComponent(item.imgFilename)}`,
-            })
-            if (result) {
-              await this.updateImageAnnotation(item.rowId, result.aliases, result.tags)
-            }
-            if (queue.length > 0 && this.config.aiBatchDelay > 0) {
-              await new Promise((resolve) => setTimeout(resolve, this.config.aiBatchDelay))
-            }
-          } catch (err) {
-            this.ctx.logger('memesluna').warn(`Auto-annotate failed for ${item.imgFilename}:`, err)
-          }
-        }
-      }
-
-      // Start concurrent workers to run multiple requests in parallel
-      for (let w = 0; w < Math.min(concurrency, queue.length); w++) {
-        worker()
-      }
-    }
-
-    return results
-  }
 
   async getImageById(id: string) {
     const rows = await this.ctx.database.get('memesluna_images', { id })
@@ -1468,14 +1335,7 @@ export class MemesLunaService extends Service {
     }
 
     const image = rows[0]
-    if (image.type === 'storage') {
-      const backend = this.getStorageBackend()
-      if (backend) {
-        try {
-          await backend.delete(image.value)
-        } catch {}
-      }
-    } else if (image.type === 'local') {
+    if (image.type === 'local') {
       const fullPath = path.join(this.getCollectionDir(collectionName), safeName)
       try {
         await fs.unlink(fullPath)
@@ -1517,26 +1377,7 @@ export class MemesLunaService extends Service {
     const ext = path.extname(safeName).toLowerCase()
     const targetFilename = `${targetIndex}${ext}`
 
-    if (image.type === 'storage') {
-      const backend = this.getStorageBackend()
-      if (backend) {
-        try {
-          const buffer = await backend.download(image.value)
-          await backend.delete(image.value)
-          const result = await backend.upload(buffer, targetFilename)
-          await this.ctx.database.set('memesluna_images', { id: image.id }, {
-            collection: targetCollection,
-            index: targetIndex,
-            filename: targetFilename,
-            value: result.key,
-            public_url: result.publicUrl || '',
-          })
-          return targetFilename
-        } catch {
-          return null
-        }
-      }
-    } else if (image.type === 'local') {
+    if (image.type === 'local') {
       const sourcePath = path.join(this.getCollectionDir(sourceCollection), safeName)
       const targetDir = this.getCollectionDir(targetCollection)
       const targetPath = path.join(targetDir, targetFilename)
@@ -1624,13 +1465,6 @@ export class MemesLunaService extends Service {
     const image = rows[0]
     if (image.type === 'external') {
       return { type: 'external', value: image.value }
-    } else if (image.type === 'storage') {
-      return {
-        type: 'storage',
-        filename: image.filename,
-        value: image.value,
-        public_url: image.public_url,
-      }
     } else {
       return {
         type: 'local',
@@ -1643,13 +1477,6 @@ export class MemesLunaService extends Service {
   async getResourceByRow(image: any): Promise<CollectionResource | null> {
     if (image.type === 'external') {
       return { type: 'external', value: image.value }
-    } else if (image.type === 'storage') {
-      return {
-        type: 'storage',
-        filename: image.filename,
-        value: image.value,
-        public_url: image.public_url,
-      }
     } else {
       return {
         type: 'local',
@@ -1740,34 +1567,51 @@ export class MemesLunaService extends Service {
     return true
   }
 
-  async buildRouteInventory(backendPath: string): Promise<string> {
+  async buildRouteInventory(backendPath: string, synonymGroups?: string[][]): Promise<string> {
     const endpoints = await this.getEndpoints()
     const collections = await this.getCollections()
 
-    const lines: string[] = []
+    const sections: string[] = []
 
-    for (const endpoint of endpoints) {
-      const desc = endpoint.description || endpoint.name
-      lines.push(`- 端点名: ${endpoint.name} | 描述: ${desc} | 接口地址: ${backendPath}/${endpoint.name}`)
+    // 端点分节
+    if (endpoints.length > 0) {
+      const endpointLines = endpoints.map(ep => {
+        const desc = ep.description || ep.name
+        return `  - ${ep.name}：${desc} → ${backendPath}/${ep.name}`
+      })
+      sections.push(`【端点转发】\n${endpointLines.join('\n')}`)
     }
 
+    // 表情包合集分节
+    const collectionLines: string[] = []
     for (const collection of collections) {
       const info = await this.getCollectionInfo(collection)
       if (info?.hasContent) {
-        const desc = info.description || collection
-        const displayName = desc.endsWith('表情包') ? desc : `${desc}表情包`
-        lines.push(`- ${displayName} | 描述: ${collection} | 表情包路径: ${backendPath}/${collection}`)
+        const desc = info.description ? `（${info.description}）` : ''
+        collectionLines.push(`  - ${collection}${desc} → ${backendPath}/${collection}`)
+      }
+    }
+    if (collectionLines.length > 0) {
+      sections.push(`【表情包合集】\n${collectionLines.join('\n')}`)
+    }
+
+    // 标签分节（展示所有同义词组的完整词列表）
+    if (synonymGroups && synonymGroups.length > 0) {
+      const groupLines = synonymGroups
+        .filter(g => g.length > 0)
+        .map(g => `  ${g.join(' / ')}`)
+      if (groupLines.length > 0) {
+        sections.push(`【情绪/标签】（每行为同一组，组内任意词均可作为路由）\n${groupLines.join('\n')}\n  标签路由格式：${backendPath}/标签名`)
       }
     }
 
-    return lines.join('\n')
+    return sections.join('\n\n')
   }
 }
 
 declare module 'koishi' {
   interface Context {
     memesluna: MemesLunaService
-    chatluna_storage: any
   }
 
   interface Tables {

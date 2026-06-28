@@ -8,6 +8,7 @@ import { Context, h } from 'koishi'
 import { Config } from './config'
 import { MemesLunaService, hashImageBuffer, isReservedPath } from './service'
 import { AIAnnotator } from './aiAnnotator'
+import formidable from 'formidable'
 
 function guessMimeByExt(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase()
@@ -37,6 +38,11 @@ function getTagRepresentative(tag: string, synonymGroups: string[][]): string | 
     }
   }
   return null
+}
+
+/** 将配置中的同义词组字符串数组解析为二维数组 */
+function parseSynonymGroups(rawGroups: string[]): string[][] {
+  return rawGroups.map(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
 }
 
 async function downloadImage(ctx: Context, url: string, maxBytes?: number): Promise<Buffer> {
@@ -93,11 +99,13 @@ function getExtFromMagicBytes(buffer: Buffer): string | null {
 }
 
 function toAbsoluteBaseUrl(ctx: Context, config: Config): string {
-  return config.selfUrl || ctx.server?.selfUrl || ''
+  const url = config.selfUrl || ctx.server?.selfUrl || ''
+  return url.replace(/\/+$/, '')
 }
 
 function getLocalBaseUrl(ctx: Context, config: Config, requestOrigin?: string): string {
-  return requestOrigin || toAbsoluteBaseUrl(ctx, config)
+  const url = requestOrigin || toAbsoluteBaseUrl(ctx, config)
+  return url.replace(/\/+$/, '')
 }
 
 function normalizeText(input: string): string {
@@ -205,6 +213,24 @@ function parseImageTags(image: any): string[] {
   try { const p = JSON.parse(image.tags || '[]'); return Array.isArray(p) ? p : [] } catch { return [] }
 }
 
+// ── 全表扫描缓存（TTL 30s），避免每次 HTTP 请求都打数据库 ──
+let _allImagesCacheTime = 0
+let _allImagesCache: any[] = []
+const ALL_IMAGES_CACHE_TTL = 30 * 1000
+
+async function getAllImagesCached(ctx: Context): Promise<any[]> {
+  const now = Date.now()
+  if (now - _allImagesCacheTime < ALL_IMAGES_CACHE_TTL) return _allImagesCache
+  _allImagesCache = await ctx.database.get('memesluna_images', {})
+  _allImagesCacheTime = now
+  return _allImagesCache
+}
+
+/** 主动失效缓存（写操作后调用） */
+function invalidateAllImagesCache() {
+  _allImagesCacheTime = 0
+}
+
 async function findByTag(
   ctx: Context,
   tagName: string,
@@ -212,9 +238,8 @@ async function findByTag(
   service: MemesLunaService,
   requestOrigin?: string
 ): Promise<{ redirectTo: string } | null> {
-  const allImages = await ctx.database.get('memesluna_images', {})
-  const rawSynonymGroups = config.synonymGroups || []
-  const synonymGroups = rawSynonymGroups.map(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
+  const allImages = await getAllImagesCached(ctx)
+  const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
 
   const normTagName = tagName.trim().toLowerCase()
   const targetGroup = synonymGroups.find(group => group.some(member => member.trim().toLowerCase() === normTagName))
@@ -232,7 +257,6 @@ async function findByTag(
   if (!resource) return null
 
   if (resource.type === 'external') return { redirectTo: resource.value }
-  if (resource.type === 'storage' && resource.public_url) return { redirectTo: resource.public_url }
 
   const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(pick.collection)}/images/${encodeURIComponent(resource.filename || '')}`
   return { redirectTo: localUrl }
@@ -272,8 +296,7 @@ async function applyDynamicForward(
   if (query && isCollection) {
     const images = await ctx.database.get('memesluna_images', { collection: routeName })
     if (images.length > 0) {
-      const rawSynonymGroups = config.synonymGroups || []
-      const synonymGroups = rawSynonymGroups.map(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
+      const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
       const ranked = rankImagesByQuery(images, query, synonymGroups)
       const qualified = ranked.filter((item) => item.score >= 6)
       if (qualified.length > 0) {
@@ -281,7 +304,6 @@ async function applyDynamicForward(
         const resource = await service.getResourceByRow(pick.image)
         if (resource) {
           if (resource.type === 'external') return { redirectTo: resource.value }
-          if (resource.type === 'storage' && resource.public_url) return { redirectTo: resource.public_url }
           const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
           return { redirectTo: localUrl }
         }
@@ -296,14 +318,6 @@ async function applyDynamicForward(
 
   if (resource.type === 'external') {
     return { redirectTo: resource.value }
-  }
-
-  if (resource.type === 'storage') {
-    if (resource.public_url) {
-      return { redirectTo: resource.public_url }
-    }
-    const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
-    return { redirectTo: localUrl }
   }
 
   const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
@@ -366,9 +380,6 @@ interface AutoCollectDailyLimitRecord {
   count: number
 }
 
-const autoCollectFrequencyTracker = new Map<string, AutoCollectFrequencyRecord>()
-const autoCollectDailyLimits = new Map<string, AutoCollectDailyLimitRecord>()
-
 function getMessageImages(session: any): string[] {
   const elements = session.elements || []
   return h
@@ -386,7 +397,10 @@ function getDailyKey(timestamp = Date.now()): string {
   return new Date(timestamp).toISOString().slice(0, 10)
 }
 
-function hitDailyAutoCollectLimit(groupId: string, limit: number): boolean {
+function hitDailyAutoCollectLimit(
+  groupId: string, limit: number,
+  autoCollectDailyLimits: Map<string, AutoCollectDailyLimitRecord>
+): boolean {
   const day = getDailyKey()
   const current = autoCollectDailyLimits.get(groupId)
   if (!current || current.day !== day) {
@@ -398,14 +412,20 @@ function hitDailyAutoCollectLimit(groupId: string, limit: number): boolean {
   return false
 }
 
-function isDailyAutoCollectLimitReached(groupId: string, limit: number): boolean {
+function isDailyAutoCollectLimitReached(
+  groupId: string, limit: number,
+  autoCollectDailyLimits: Map<string, AutoCollectDailyLimitRecord>
+): boolean {
   const day = getDailyKey()
   const current = autoCollectDailyLimits.get(groupId)
   if (!current || current.day !== day) return false
   return current.count >= limit
 }
 
-function trackImageFrequency(hash: string, groupId: string, windowMs: number): { count: number; alreadyStaged: boolean } {
+function trackImageFrequency(
+  hash: string, groupId: string, windowMs: number,
+  autoCollectFrequencyTracker: Map<string, AutoCollectFrequencyRecord>
+): { count: number; alreadyStaged: boolean } {
   const now = Date.now()
   const key = `${groupId}:${hash}`
   const record = autoCollectFrequencyTracker.get(key) || { timestamps: [], staged: false }
@@ -415,13 +435,19 @@ function trackImageFrequency(hash: string, groupId: string, windowMs: number): {
   return { count: record.timestamps.length, alreadyStaged: record.staged }
 }
 
-function markImageFrequencyStaged(hash: string, groupId: string) {
+function markImageFrequencyStaged(
+  hash: string, groupId: string,
+  autoCollectFrequencyTracker: Map<string, AutoCollectFrequencyRecord>
+) {
   const key = `${groupId}:${hash}`
   const record = autoCollectFrequencyTracker.get(key)
   if (record) record.staged = true
 }
 
-function cleanupAutoCollectFrequency(windowMs: number) {
+function cleanupAutoCollectFrequency(
+  windowMs: number,
+  autoCollectFrequencyTracker: Map<string, AutoCollectFrequencyRecord>
+) {
   const now = Date.now()
   for (const [key, record] of autoCollectFrequencyTracker.entries()) {
     record.timestamps = record.timestamps.filter((timestamp) => now - timestamp <= windowMs)
@@ -457,10 +483,9 @@ async function getPromptTags(ctx: Context, config: Config): Promise<string> {
     ctx.logger('memesluna').warn('Failed to fetch image tags for prompt rendering:', err)
   }
 
-  const rawSynonymGroups = config.synonymGroups || []
-  for (const group of rawSynonymGroups) {
-    const words = group.split(/[,，]/).map(item => item.trim()).filter(Boolean)
-    for (const word of words) {
+  const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
+  for (const group of synonymGroups) {
+    for (const word of group) {
       realTags.add(word)
     }
   }
@@ -472,7 +497,8 @@ async function getPromptTags(ctx: Context, config: Config): Promise<string> {
 async function updateMemesVariable(ctx: Context, config: Config, service: MemesLunaService) {
 
   const baseUrl = toAbsoluteBaseUrl(ctx, config)
-  const inventory = await service.buildRouteInventory(config.backendPath)
+  const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
+  const inventory = await service.buildRouteInventory(config.backendPath, synonymGroups)
   const tagsStr = await getPromptTags(ctx, config)
 
   ;(ctx as any).chatluna.promptRenderer.setVariable('endpoint', inventory || '- 暂无可用路由')
@@ -693,13 +719,9 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
       let mergedTags = tags ?? currentTags
 
       if (tags !== undefined) {
-        const allCandidates = new Set(
-          (config.synonymGroups || [])
-            .flatMap(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
-        )
-        const validTags = tags
-          .map(t => t.trim())
-          .filter(t => allCandidates.has(t))
+        const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
+        const allCandidates = new Set(synonymGroups.flatMap(group => group))
+        const validTags = tags.map(t => t.trim()).filter(t => allCandidates.has(t))
         mergedTags = validTags.slice(0, 1)
       }
 
@@ -727,10 +749,9 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
     'memesluna/getTagSummary',
     withReady(async () => {
       const rows = await ctx.database.get('memesluna_images', {})
-      const rawSynonymGroups = config.synonymGroups || []
-      const synonymGroups = rawSynonymGroups.map(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
+      const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
 
-      const tagMap = new Map<string, { count: number; previewUrls: string[] }>()
+      const tagMap = new Map<string, { count: number; previewUrls: string[]; groupIndex: number; synonymWords: string[] }>()
 
       for (const row of rows) {
         let tags: string[] = []
@@ -747,11 +768,14 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
 
         for (const rep of imageReps) {
           if (!tagMap.has(rep)) {
-            tagMap.set(rep, { count: 0, previewUrls: [] })
+            // Find group index and all synonym words for this representative
+            const groupIdx = synonymGroups.findIndex(g => g[0] === rep)
+            const synonymWords = groupIdx >= 0 ? synonymGroups[groupIdx] : [rep]
+            tagMap.set(rep, { count: 0, previewUrls: [], groupIndex: groupIdx, synonymWords })
           }
           const entry = tagMap.get(rep)!
           entry.count++
-          if (entry.previewUrls.length < 4) {
+          if (entry.previewUrls.length < 6) {
             const bp = config.backendPath || '/memesluna'
             entry.previewUrls.push(`${bp}/api/collections/${encodeURIComponent(row.collection)}/images/${encodeURIComponent(row.filename)}`)
           }
@@ -759,7 +783,13 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
       }
 
       const result = Array.from(tagMap.entries())
-        .map(([tag, data]) => ({ tag, count: data.count, previewUrls: data.previewUrls }))
+        .map(([tag, data]) => ({
+          tag,
+          count: data.count,
+          previewUrls: data.previewUrls,
+          groupIndex: data.groupIndex,
+          synonymWords: data.synonymWords,
+        }))
         .sort((a, b) => b.count - a.count)
 
       return result
@@ -773,8 +803,7 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
       const matched: Array<{ collection: string; filename: string; tags: string[]; imageUrl: string }> = []
       const bp = config.backendPath || '/memesluna'
 
-      const rawSynonymGroups = config.synonymGroups || []
-      const synonymGroups = rawSynonymGroups.map(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
+      const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
       const targetGroup = synonymGroups.find(group => group[0]?.toLowerCase() === tag.toLowerCase())
       const allowedTagsInGroup = targetGroup ? new Set(targetGroup.map(t => t.toLowerCase())) : new Set([tag.toLowerCase()])
 
@@ -799,6 +828,10 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
 function applyAutoCollect(ctx: Context, config: Config) {
   if (!config.autoCollect) return
 
+  // 局部 Map：热重载时随插件 ctx dispose 一起销毁，不会累积
+  const autoCollectFrequencyTracker = new Map<string, AutoCollectFrequencyRecord>()
+  const autoCollectDailyLimits = new Map<string, AutoCollectDailyLimitRecord>()
+
   const whitelist = new Set((config.whitelistGroups || []).map((group) => group.trim()).filter(Boolean))
 
   const windowMinutes = Math.max(1, config.emojiFrequencyWindowMinutes || 10)
@@ -815,7 +848,7 @@ function applyAutoCollect(ctx: Context, config: Config) {
     if (!groupId) return
     if (whitelist.size && !whitelist.has(groupId)) return
 
-    if (isDailyAutoCollectLimitReached(groupId, dailyLimit)) return
+    if (isDailyAutoCollectLimitReached(groupId, dailyLimit, autoCollectDailyLimits)) return
 
     const imageUrls = getMessageImages(session)
     if (!imageUrls.length) return
@@ -831,16 +864,16 @@ function applyAutoCollect(ctx: Context, config: Config) {
         if (buffer.length < minBytes || buffer.length > maxBytes) continue
 
         const hash = hashImageBuffer(buffer)
-        const frequency = trackImageFrequency(hash, groupId, windowMs)
+        const frequency = trackImageFrequency(hash, groupId, windowMs, autoCollectFrequencyTracker)
         if (frequency.alreadyStaged || frequency.count < threshold) continue
 
         const duplicate = await service.getDuplicateImageByHash(hash, { includeStaged: true, includeImages: true })
         if (duplicate) {
-          markImageFrequencyStaged(hash, groupId)
+          markImageFrequencyStaged(hash, groupId, autoCollectFrequencyTracker)
           continue
         }
 
-        if (hitDailyAutoCollectLimit(groupId, dailyLimit)) {
+        if (hitDailyAutoCollectLimit(groupId, dailyLimit, autoCollectDailyLimits)) {
           ctx.logger('memesluna').debug(`Auto collect daily limit reached for group ${groupId}`)
           continue
         }
@@ -851,14 +884,14 @@ function applyAutoCollect(ctx: Context, config: Config) {
           `auto:${groupId}`,
           `${windowMinutes} 分钟内出现 ${frequency.count} 次`
         )
-        markImageFrequencyStaged(hash, groupId)
+        markImageFrequencyStaged(hash, groupId, autoCollectFrequencyTracker)
       } catch (error) {
         ctx.logger('memesluna').debug(`Auto collect image skipped: ${(error as Error).message}`)
       }
     }
   })
 
-  ctx.setInterval(() => cleanupAutoCollectFrequency(windowMs), Math.max(60 * 1000, windowMs))
+  ctx.setInterval(() => cleanupAutoCollectFrequency(windowMs, autoCollectFrequencyTracker), Math.max(60 * 1000, windowMs))
   ctx.logger('memesluna').info(`Auto collect started: ${windowMinutes}m/${threshold} times, ${config.minEmojiSize || 50}KB-${config.maxEmojiSize || 15}MB, ${dailyLimit}/day/group`)
 }
 
@@ -891,7 +924,8 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     const endpoints = await service.getEndpoints()
     const collections = await service.getCollections()
     const collectionInfos = await Promise.all(collections.map((name) => service.getCollectionInfo(name)))
-    const inventory = await service.buildRouteInventory(basePath)
+    const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
+    const inventory = await service.buildRouteInventory(basePath, synonymGroups)
     const tagsStr = await getPromptTags(ctx, config)
 
     const llmPrompt = config.injectVariablesPrompt
@@ -1026,26 +1060,64 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
 
   ctx.server.post(`${basePath}/api/admin/collections/:name/images`, async (koa) => {
     const collectionName = toTrimmedString(koa.params.name)
-    const body = getRequestBody(koa)
-    const items = Array.isArray(body.images)
-      ? (body.images as Array<Record<string, unknown>>)
-      : []
-
-    if (!items.length) {
+    if (!collectionName) {
       koa.status = 400
-      koa.body = { error: 'No images provided' }
+      koa.body = { error: 'Collection name is required' }
       return
     }
 
-    try {
-      const imagesToUpload = items
-        .map((item) => ({
-          base64Data: toTrimmedString(item.base64),
-          originalName: toTrimmedString(item.originalName) || undefined,
-        }))
-        .filter((img) => img.base64Data)
+    const storageRoot = path.resolve(ctx.baseDir, config.storagePath || 'data/memesluna')
+    const tempDir = path.join(storageRoot, '.temp_upload')
+    await fs.mkdir(tempDir, { recursive: true })
 
-      const uploaded = await service.addLocalImagesBase64(collectionName, imagesToUpload)
+    const form = formidable({
+      uploadDir: tempDir,
+      keepExtensions: true,
+      maxFileSize: 100 * 1024 * 1024, // 100MB max total upload size
+      multiples: true,
+    })
+
+    try {
+      const [fields, files] = await new Promise<[any, any]>((resolve, reject) => {
+        form.parse(koa.req, (err, fields, files) => {
+          if (err) return reject(err)
+          resolve([fields, files])
+        })
+      })
+
+      const fileList: any[] = []
+      const fileField = files.images
+      if (fileField) {
+        if (Array.isArray(fileField)) {
+          fileList.push(...fileField)
+        } else {
+          fileList.push(fileField)
+        }
+      }
+
+      if (!fileList.length) {
+        koa.status = 400
+        koa.body = { error: 'No images provided' }
+        return
+      }
+
+      const uploaded: string[] = []
+      for (const file of fileList) {
+        const filePath = file.filepath
+        if (!filePath) continue
+
+        const buffer = await fs.readFile(filePath)
+        const name = await service.addLocalImageBuffer(
+          collectionName,
+          buffer,
+          file.originalFilename || file.newFilename
+        )
+        uploaded.push(name)
+
+        // Delete temporary file
+        await fs.unlink(filePath).catch(() => {})
+      }
+
       koa.body = {
         ok: true,
         uploaded,
@@ -1053,6 +1125,9 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     } catch (error) {
       koa.status = 400
       koa.body = { error: (error as Error).message || 'Failed to upload images' }
+    } finally {
+      // Clean up tempDir if empty
+      await fs.rmdir(tempDir).catch(() => {})
     }
   })
 
@@ -1420,11 +1495,29 @@ export function apply(ctx: Context, config: Config) {
   root
     .subcommand('.stole <name:string>', '偷取引用消息中的图片并存入指定表情包')
     .action(async ({ session }, name) => {
-      return await stoleAction(session, name)
+      const result = await stoleAction(session, name)
+      // 偷图成功后，如果开启了自动标注，异步触发标注队列（不阻塞回复）
+      if (result && typeof result === 'string' && result.includes('成功偷了') && config.autoAnnotate) {
+        const service = ctx.memesluna
+        const annotator = service.annotator
+        if (annotator) {
+          const rows = await ctx.database.get('memesluna_images', { collection: name })
+          const targets = rows.filter((img) => {
+            let tags: string[] = []
+            try { const p = JSON.parse(img.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
+            return tags.length === 0 && img.type === 'local'
+          })
+          // 异步标注，不 await
+          void service.queueAnnotation(targets).catch((err) => {
+            ctx.logger('memesluna').warn('stole auto-annotate failed:', err)
+          })
+        }
+      }
+      return result
     })
 
   root
-    .subcommand('.tagall', '批量为以往的图片自动进行 AI 语义打标')
+    .subcommand('.tagall', '批量为以往的图片自动进行 AI 语义打标', { authority: 3 })
     .option('force', '-f 强制为已打标的图片重新进行 AI 标注')
     .action(async ({ session, options }) => {
       const service = ctx.memesluna
@@ -1497,7 +1590,7 @@ export function apply(ctx: Context, config: Config) {
     })
 
   root
-    .subcommand('.untagall', '一键清空表情图片的标签')
+    .subcommand('.untagall', '一键清空表情图片的标签', { authority: 3 })
     .alias('.cleartags')
     .option('collection', '-c <collection:string> 仅清空指定合集的图片标签')
     .action(async ({ session, options }) => {
@@ -1566,7 +1659,7 @@ export * from './service'
 
 export const inject = {
   required: ['database', 'chatluna', 'server'],
-  optional: ['memesluna'],
+  optional: ['memesluna', 'console'],
 }
 
 
