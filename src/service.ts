@@ -1097,7 +1097,7 @@ export class MemesLunaService extends Service {
     buffer: Buffer,
     originalName?: string,
     extHint?: string
-  ): Promise<string> {
+  ): Promise<{ id: string; filename: string }> {
     this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       throw new Error(`Collection not found: ${collectionName}`)
@@ -1145,17 +1145,7 @@ export class MemesLunaService extends Service {
       created_at: new Date(),
     })
 
-    if (this._annotator && this.config.autoAnnotate) {
-      this._annotator.annotate(buffer, {
-        filename: finalName,
-        collectionName,
-        imageUrl: `${this.config.backendPath}/${encodeURIComponent(collectionName)}/${encodeURIComponent(finalName)}`,
-      }).then(result => {
-        if (result) return this.updateImageAnnotation(id, result.aliases, result.tags)
-      }).catch(err => this.ctx.logger('memesluna').warn('Auto-annotate failed:', err))
-    }
-
-    return finalName
+    return { id, filename: finalName }
   }
 
 
@@ -1312,8 +1302,18 @@ export class MemesLunaService extends Service {
     if (!staged) return null
 
     const originalName = this.isImageFile(row.original_name) ? row.original_name : row.filename
-    const saved = await this.addLocalImageBuffer(collectionName, staged.buffer, originalName)
+    const savedResult = await this.addLocalImageBuffer(collectionName, staged.buffer, originalName)
+    const saved = savedResult.filename
     await this.deleteStagedImage(id)
+
+    if (this._annotator && this.config.autoAnnotate) {
+      void this.queueAnnotation([{
+        id: savedResult.id,
+        collection: collectionName,
+        filename: saved,
+      }])
+    }
+
     return saved
   }
   async deleteImageFromCollection(collectionName: string, filename: string): Promise<boolean> {

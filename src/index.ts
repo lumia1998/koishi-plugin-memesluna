@@ -1125,21 +1125,31 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
 
     try {
       const uploaded: string[] = []
+      const rowsToAnnotate: any[] = []
       for (const file of fileList) {
         const filePath = file.filepath || file.path
         const originalFilename = file.originalFilename || file.name || file.newFilename
         if (!filePath) continue
 
         const buffer = await fs.readFile(filePath)
-        const name = await service.addLocalImageBuffer(
+        const result = await service.addLocalImageBuffer(
           collectionName,
           buffer,
           originalFilename
         )
-        uploaded.push(name)
+        uploaded.push(result.filename)
+        rowsToAnnotate.push({
+          id: result.id,
+          collection: collectionName,
+          filename: result.filename,
+        })
 
         // Delete temporary file
         await fs.unlink(filePath).catch(() => {})
+      }
+
+      if (service.annotator && config.autoAnnotate && rowsToAnnotate.length > 0) {
+        void service.queueAnnotation(rowsToAnnotate)
       }
 
       koa.body = {
@@ -1489,6 +1499,7 @@ export function apply(ctx: Context, config: Config) {
 
     let successCount = 0
     const savedFilenames: string[] = []
+    const rowsToAnnotate: any[] = []
 
     for (const url of imageUrls) {
       try {
@@ -1498,8 +1509,13 @@ export function apply(ctx: Context, config: Config) {
           return '图片格式不兼容，仅支持 JPG/PNG/GIF/WEBP/BMP 格式图片（已拒绝 AVIF，且不会放入暂缓区）'
         }
 
-        const filename = await service.addLocalImageBuffer(name, buffer, `stole${ext}`)
-        savedFilenames.push(filename)
+        const result = await service.addLocalImageBuffer(name, buffer, `stole${ext}`)
+        savedFilenames.push(result.filename)
+        rowsToAnnotate.push({
+          id: result.id,
+          collection: name,
+          filename: result.filename,
+        })
         successCount++
       } catch (err) {
         ctx.logger('memesluna').error(`Failed to steal image from URL: ${url}`, err)
@@ -1508,6 +1524,10 @@ export function apply(ctx: Context, config: Config) {
 
     if (successCount === 0) {
       return '偷表情包失败，下载图片或上传保存时发生错误。'
+    }
+
+    if (service.annotator && config.autoAnnotate && rowsToAnnotate.length > 0) {
+      void service.queueAnnotation(rowsToAnnotate)
     }
 
     return `成功偷了 ${successCount} 张表情包存入表情包 "${name}"！新文件名：${savedFilenames.join(', ')}`
