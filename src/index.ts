@@ -1066,51 +1066,75 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
       return
     }
 
-    const storageRoot = path.resolve(ctx.baseDir, config.storagePath || 'data/memesluna')
-    const tempDir = path.join(storageRoot, '.temp_upload')
-    await fs.mkdir(tempDir, { recursive: true })
+    let fileList: any[] = []
 
-    const form = formidable({
-      uploadDir: tempDir,
-      keepExtensions: true,
-      maxFileSize: 100 * 1024 * 1024, // 100MB max total upload size
-      multiples: true,
-    })
+    // 1. Check if the upstream server middleware has already parsed the files
+    const request = koa.request as any
+    if (request.files && request.files.images) {
+      const fileField = request.files.images
+      if (Array.isArray(fileField)) {
+        fileList.push(...fileField)
+      } else {
+        fileList.push(fileField)
+      }
+    }
 
-    try {
-      const [fields, files] = await new Promise<[any, any]>((resolve, reject) => {
-        form.parse(koa.req, (err, fields, files) => {
-          if (err) return reject(err)
-          resolve([fields, files])
-        })
+    // 2. If not pre-parsed, parse using formidable
+    if (!fileList.length) {
+      const storageRoot = path.resolve(ctx.baseDir, config.storagePath || 'data/memesluna')
+      const tempDir = path.join(storageRoot, '.temp_upload')
+      await fs.mkdir(tempDir, { recursive: true })
+
+      const form = formidable({
+        uploadDir: tempDir,
+        keepExtensions: true,
+        maxFileSize: 100 * 1024 * 1024, // 100MB
+        multiples: true,
       })
 
-      const fileList: any[] = []
-      const fileField = files.images
-      if (fileField) {
-        if (Array.isArray(fileField)) {
-          fileList.push(...fileField)
-        } else {
-          fileList.push(fileField)
+      try {
+        const [fields, files] = await new Promise<[any, any]>((resolve, reject) => {
+          form.parse(koa.req, (err, fields, files) => {
+            if (err) return reject(err)
+            resolve([fields, files])
+          })
+        })
+
+        const fileField = files.images
+        if (fileField) {
+          if (Array.isArray(fileField)) {
+            fileList.push(...fileField)
+          } else {
+            fileList.push(fileField)
+          }
         }
-      }
-
-      if (!fileList.length) {
+      } catch (err) {
         koa.status = 400
-        koa.body = { error: 'No images provided' }
+        koa.body = { error: err.message || 'Failed to parse upload stream' }
         return
+      } finally {
+        await fs.rmdir(tempDir).catch(() => {})
       }
+    }
 
+    if (!fileList.length) {
+      koa.status = 400
+      koa.body = { error: 'No images provided' }
+      return
+    }
+
+    try {
       const uploaded: string[] = []
       for (const file of fileList) {
-        const filePath = file.filepath
+        const filePath = file.filepath || file.path
+        const originalFilename = file.originalFilename || file.name || file.newFilename
         if (!filePath) continue
 
         const buffer = await fs.readFile(filePath)
         const name = await service.addLocalImageBuffer(
           collectionName,
           buffer,
-          file.originalFilename || file.newFilename
+          originalFilename
         )
         uploaded.push(name)
 
@@ -1125,9 +1149,6 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     } catch (error) {
       koa.status = 400
       koa.body = { error: (error as Error).message || 'Failed to upload images' }
-    } finally {
-      // Clean up tempDir if empty
-      await fs.rmdir(tempDir).catch(() => {})
     }
   })
 
