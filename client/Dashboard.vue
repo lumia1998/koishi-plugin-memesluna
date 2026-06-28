@@ -2677,38 +2677,50 @@ async function uploadFiles(files: FileList) {
     return
   }
 
-  showToast(`正在上传 ${uploadableFiles.length} 张表情图片...`, 'info')
+  showToast(`开始上传 ${uploadableFiles.length} 张表情图片...`, 'info')
 
-  try {
-    const formData = new FormData()
-    for (const file of uploadableFiles) {
+  let successCount = 0
+  let failedCount = 0
+
+  for (let i = 0; i < uploadableFiles.length; i++) {
+    const file = uploadableFiles[i]
+    showToast(`正在上传: ${file.name} (${i + 1}/${uploadableFiles.length})...`, 'info')
+
+    try {
+      const formData = new FormData()
       formData.append('images', file)
-    }
 
-    const response = await fetch(`${getBackendBaseUrl()}/api/admin/collections/${encodeURIComponent(currentCollection.value.name)}/images`, {
-      method: 'POST',
-      body: formData
-    })
+      const response = await fetch(`${getBackendBaseUrl()}/api/admin/collections/${encodeURIComponent(currentCollection.value.name)}/images`, {
+        method: 'POST',
+        body: formData
+      })
 
-    if (response.ok) {
-      const resData = await response.json()
-      if (resData.ok && resData.uploaded && resData.uploaded.length > 0) {
-        const stagedHint = stagedCount ? `，另有 ${stagedCount} 张进入暂缓区` : ''
-        const avifHint = avifFiles.length ? `，${avifFiles.length} 张 AVIF 已直接拦截` : ''
-        showToast(`成功将 ${resData.uploaded.length} 张表情入库并完成数字重命名${stagedHint}${avifHint}`, 'success')
+      if (response.ok) {
+        const resData = await response.json()
+        if (resData.ok && resData.uploaded && resData.uploaded.length > 0) {
+          successCount++
+        } else {
+          failedCount++
+        }
       } else {
-        showToast('上传图片写入失败', 'error')
+        failedCount++
       }
-    } else {
-      const errData = await response.json().catch(() => ({}))
-      showToast(errData.error || '上传中继失败', 'error')
+    } catch (err) {
+      failedCount++
     }
-  } catch (err) {
-    showToast(`上传网络错误: ${err instanceof Error ? err.message : '错误'}`, 'error')
-  } finally {
-    await loadCollectionResources(currentCollection.value.name)
-    await fetchState()
   }
+
+  const stagedHint = stagedCount ? `，另有 ${stagedCount} 张进入暂缓区` : ''
+  const avifHint = avifFiles.length ? `，${avifFiles.length} 张 AVIF 已直接拦截` : ''
+
+  if (successCount > 0) {
+    showToast(`成功上传 ${successCount} 张图片${failedCount ? `，失败 ${failedCount} 张` : ''}${stagedHint}${avifHint}`, 'success')
+  } else {
+    showToast(`图片上传失败${stagedHint}${avifHint}`, 'error')
+  }
+
+  await loadCollectionResources(currentCollection.value.name)
+  await fetchState()
 }
 
 function fileToBase64(file: File): Promise<string> {
