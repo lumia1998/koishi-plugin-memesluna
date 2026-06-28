@@ -626,9 +626,15 @@ export class MemesLunaService extends Service {
 
     if (includeStaged) {
       const stagedRows = await this.ctx.database.get('memesluna_staged_images', { hash })
-      const staged = stagedRows.find((row) => row.id !== options.ignoreStagedId)
-      if (staged) {
-        return `暂缓区/${staged.original_name || staged.filename}`
+      for (const staged of stagedRows) {
+        if (staged.id === options.ignoreStagedId) continue
+        try {
+          const fullPath = this.resolveStagedImagePath(staged.filename)
+          await fs.access(fullPath)
+          return `暂缓区/${staged.original_name || staged.filename}`
+        } catch {
+          await this.ctx.database.remove('memesluna_staged_images', { id: staged.id })
+        }
       }
     }
 
@@ -637,10 +643,19 @@ export class MemesLunaService extends Service {
       if (options.collection) {
         query.collection = options.collection
       }
-      const imageRows = await this.ctx.database.get('memesluna_images', query, { limit: 1 })
-      if (imageRows.length) {
-        const image = imageRows[0]
-        return `${image.collection}/${image.filename}`
+      const imageRows = await this.ctx.database.get('memesluna_images', query)
+      for (const image of imageRows) {
+        if (image.type === 'local') {
+          try {
+            const fullPath = this.resolveLocalImagePath(image.collection, image.value)
+            await fs.access(fullPath)
+            return `${image.collection}/${image.filename}`
+          } catch {
+            await this.ctx.database.remove('memesluna_images', { id: image.id })
+          }
+        } else {
+          return `${image.collection}/${image.filename}`
+        }
       }
     }
 
