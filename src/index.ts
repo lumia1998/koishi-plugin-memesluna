@@ -1070,17 +1070,19 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
 
     // 1. Check if the upstream server middleware has already parsed the files
     const request = koa.request as any
-    if (request.files && request.files.images) {
-      const fileField = request.files.images
-      if (Array.isArray(fileField)) {
-        fileList.push(...fileField)
-      } else {
-        fileList.push(fileField)
+    const parsedFiles = request.files || request.body?.files || request.body?.images
+    
+    if (parsedFiles) {
+      const fileField = parsedFiles.images || parsedFiles.file || parsedFiles.files || parsedFiles
+      if (fileField) {
+        if (Array.isArray(fileField)) {
+          fileList.push(...fileField)
+        } else {
+          fileList.push(fileField)
+        }
       }
-    }
-
-    // 2. If not pre-parsed, parse using formidable
-    if (!fileList.length) {
+    } else {
+      // 2. If not pre-parsed by any upstream middleware, parse using formidable
       const storageRoot = path.resolve(ctx.baseDir, config.storagePath || 'data/memesluna')
       const tempDir = path.join(storageRoot, '.temp_upload')
       await fs.mkdir(tempDir, { recursive: true })
@@ -1100,7 +1102,7 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
           })
         })
 
-        const fileField = files.images
+        const fileField = files.images || files.file || files.files
         if (fileField) {
           if (Array.isArray(fileField)) {
             fileList.push(...fileField)

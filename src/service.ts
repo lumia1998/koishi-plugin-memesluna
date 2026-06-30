@@ -117,7 +117,7 @@ export function isReservedPath(name: string): boolean {
 }
 
 const COLLECTION_NAME_REGEXP = /^[^\/\\?%*:|"<>.]+$/
-const ENDPOINT_NAME_REGEXP = /^[a-zA-Z0-9_-]+$/
+const ENDPOINT_NAME_REGEXP = /^[^\/\\?%*:|"<>.]+$/
 
 export interface ApiEndpoint {
   id: string
@@ -745,13 +745,13 @@ export class MemesLunaService extends Service {
 
   private ensureCollectionName(name: string) {
     if (!this.isValidCollectionName(name)) {
-      throw new Error('Invalid collection name: only letters, numbers, _ and - are allowed.')
+      throw new Error('Invalid collection name: special characters like /\\?%*:|"<>. are not allowed.')
     }
   }
 
   private ensureEndpointName(name: string) {
     if (!name || !ENDPOINT_NAME_REGEXP.test(name)) {
-      throw new Error('Invalid endpoint name: only letters, numbers, _ and - are allowed.')
+      throw new Error('Invalid endpoint name: special characters like /\\?%*:|"<>. are not allowed.')
     }
     if (isReservedPath(name)) {
       throw new Error('Endpoint name is a reserved path.')

@@ -2671,8 +2671,8 @@ async function uploadFiles(files: FileList) {
     return
   }
 
-  if (uploadableFiles.length > 50) {
-    showToast('单次上传表情上限为 50 张，请分批次导入', 'error')
+  if (uploadableFiles.length > 500) {
+    showToast('单次选择图片上限为 500 张，请分批次导入或使用磁盘同步', 'error')
     if (stagedCount) await fetchState()
     return
   }
