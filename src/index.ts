@@ -6,7 +6,7 @@ import type {} from 'koishi-plugin-chatluna'
 
 import { Context, h } from 'koishi'
 import { Config } from './config'
-import { MemesLunaService, hashImageBuffer, isReservedPath } from './service'
+import { MEMESLUNA_IMAGES_UPDATED, MemesLunaService, hashImageBuffer, isReservedPath } from './service'
 import { AIAnnotator } from './aiAnnotator'
 import formidable from 'formidable'
 
@@ -213,6 +213,97 @@ function parseImageTags(image: any): string[] {
   try { const p = JSON.parse(image.tags || '[]'); return Array.isArray(p) ? p : [] } catch { return [] }
 }
 
+async function getRealImageTags(ctx: Context): Promise<string[]> {
+  const realTags = new Set<string>()
+  try {
+    const rows = await ctx.database.get('memesluna_images', {})
+    for (const row of rows) {
+      for (const tag of parseImageTags(row)) {
+        const trimmed = tag.trim()
+        if (trimmed) realTags.add(trimmed)
+      }
+    }
+  } catch (err) {
+    ctx.logger('memesluna').warn('Failed to fetch image tags for prompt rendering:', err)
+  }
+  return Array.from(realTags)
+}
+
+function getAvailableTagGroups(realTags: string[], synonymGroups: string[][]): string[][] {
+  const realTagLowerSet = new Set(realTags.map((tag) => tag.toLowerCase()))
+  const groupedTagLowerSet = new Set<string>()
+  const availableGroups: string[][] = []
+
+  for (const group of synonymGroups) {
+    const normalizedGroup = Array.from(new Set(group.map((tag) => tag.trim()).filter(Boolean)))
+    if (!normalizedGroup.length) continue
+
+    const groupLower = normalizedGroup.map((tag) => tag.toLowerCase())
+    for (const tag of groupLower) groupedTagLowerSet.add(tag)
+
+    if (groupLower.some((tag) => realTagLowerSet.has(tag))) {
+      availableGroups.push(normalizedGroup)
+    }
+  }
+
+  for (const tag of realTags) {
+    if (!groupedTagLowerSet.has(tag.toLowerCase())) {
+      availableGroups.push([tag])
+    }
+  }
+
+  return availableGroups
+}
+
+async function getAvailableEmotionTagGroups(ctx: Context, config: Config): Promise<string[][]> {
+  if (!config.enableEmotionTags) return []
+  const realTags = await getRealImageTags(ctx)
+  if (!realTags.length) return []
+  return getAvailableTagGroups(realTags, parseSynonymGroups(config.synonymGroups || []))
+}
+
+function renderEmotionTagRoutes(
+  tagGroups: string[][],
+  backendPath: string
+): { text: string; tags: string } {
+  const normalizedGroups = tagGroups
+    .map((group) => Array.from(new Set(group.map((tag) => tag.trim()).filter(Boolean))))
+    .filter((group) => group.length > 0)
+
+  const tags = Array.from(new Set(normalizedGroups.flat())).join('、')
+  if (!normalizedGroups.length) {
+    return { text: '', tags }
+  }
+
+  const lines = normalizedGroups.map((group) => `  ${group.join(' / ')}`)
+  return {
+    tags,
+    text: `【情绪/标签】（每行为同一组，组内任意词均可作为路由）\n${lines.join('\n')}\n  标签路由格式：${backendPath}/标签名`,
+  }
+}
+
+function getInjectVariablesPromptTemplate(config: Config): string {
+  const template = config.injectVariablesPrompt || ''
+  if (config.enableEmotionTags) return template
+
+  return template
+    .replace(
+      '你可以根据自己当前的心情或者动作从标签中选择合适的表情发送，也可以根据需要选择合适的表情包合集或端点。',
+      '你可以根据需要选择合适的表情包合集或端点发送图片。'
+    )
+    .split(/\r?\n/g)
+    .filter((line) => {
+      const compact = line.replace(/\s+/g, '')
+      return !(
+        compact.includes('{base_url}/memesluna/开心') ||
+        compact.includes('{base_url}/memesluna/标签名') ||
+        compact.includes('合集名和标签名不要重名') ||
+        compact.includes('标签路由按情绪跨合集随机返图')
+      )
+    })
+    .join('\n')
+}
+
 // ── 全表扫描缓存（TTL 30s），避免每次 HTTP 请求都打数据库 ──
 let _allImagesCacheTime = 0
 let _allImagesCache: any[] = []
@@ -274,9 +365,11 @@ async function applyDynamicForward(
   const isCollection = await service.collectionExists(routeName)
 
   if (!endpoint && !isCollection) {
-    // 尝试按标签查找（跨合集）
-    const tagResult = await findByTag(ctx, routeName, config, service, requestOrigin)
-    if (tagResult) return tagResult
+    if (config.enableEmotionTags) {
+      // 尝试按标签查找（跨合集）
+      const tagResult = await findByTag(ctx, routeName, config, service, requestOrigin)
+      if (tagResult) return tagResult
+    }
     return { notFound: true }
   }
 
@@ -470,42 +563,20 @@ async function buildAdminState(service: MemesLunaService) {
   }
 }
 
-async function getPromptTags(ctx: Context, config: Config): Promise<string> {
-  const realTags = new Set<string>()
-  try {
-    const rows = await ctx.database.get('memesluna_images', {})
-    for (const row of rows) {
-      let tags: string[] = []
-      try { const p = JSON.parse(row.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
-      for (const tag of tags) realTags.add(tag)
-    }
-  } catch (err) {
-    ctx.logger('memesluna').warn('Failed to fetch image tags for prompt rendering:', err)
-  }
-
-  const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
-  for (const group of synonymGroups) {
-    for (const word of group) {
-      realTags.add(word)
-    }
-  }
-
-  const allTagsList = Array.from(realTags).filter(Boolean)
-  return allTagsList.length > 0 ? allTagsList.join('、') : '开心、无语、生气、可爱'
-}
-
 async function updateMemesVariable(ctx: Context, config: Config, service: MemesLunaService) {
 
   const baseUrl = toAbsoluteBaseUrl(ctx, config)
-  const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
-  const inventory = await service.buildRouteInventory(config.backendPath, synonymGroups)
-  const tagsStr = await getPromptTags(ctx, config)
+  const inventory = await service.buildRouteInventory(config.backendPath)
+  const tagGroups = await getAvailableEmotionTagGroups(ctx, config)
+  const { text: tagRoutes, tags: tagsStr } = renderEmotionTagRoutes(tagGroups, config.backendPath)
 
   ;(ctx as any).chatluna.promptRenderer.setVariable('endpoint', inventory || '- 暂无可用路由')
+  ;(ctx as any).chatluna.promptRenderer.setVariable('tag_routes', tagRoutes)
 
-  const memeslunaText = config.injectVariablesPrompt
+  const memeslunaText = getInjectVariablesPromptTemplate(config)
     .replaceAll('{endpoint}', inventory || '- 暂无可用路由')
     .replaceAll('{base_url}', baseUrl)
+    .replaceAll('{tag_routes}', tagRoutes)
     .replaceAll('{tags}', tagsStr)
 
   ;(ctx as any).chatluna.promptRenderer.setVariable('memesluna', memeslunaText)
@@ -551,6 +622,7 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
         endpoints,
         collections: detailedCollections.filter(Boolean),
         stagedImages,
+        enableEmotionTags: config.enableEmotionTags,
         synonymGroups: config.synonymGroups,
       }
     })
@@ -924,18 +996,20 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     const endpoints = await service.getEndpoints()
     const collections = await service.getCollections()
     const collectionInfos = await Promise.all(collections.map((name) => service.getCollectionInfo(name)))
-    const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
-    const inventory = await service.buildRouteInventory(basePath, synonymGroups)
-    const tagsStr = await getPromptTags(ctx, config)
+    const inventory = await service.buildRouteInventory(basePath)
+    const tagGroups = await getAvailableEmotionTagGroups(ctx, config)
+    const { text: tagRoutes, tags: tagsStr } = renderEmotionTagRoutes(tagGroups, basePath)
 
-    const llmPrompt = config.injectVariablesPrompt
+    const llmPrompt = getInjectVariablesPromptTemplate(config)
       .replaceAll('{endpoint}', inventory || '- 暂无可用路由')
       .replaceAll('{base_url}', baseUrl)
+      .replaceAll('{tag_routes}', tagRoutes)
       .replaceAll('{tags}', tagsStr)
 
     koa.body = {
       llmPrompt,
       routeInventory: inventory,
+      tagRoutes,
       endpoints,
       collections: collectionInfos.filter(Boolean),
     }
@@ -1083,7 +1157,7 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
       }
     } else {
       // 2. If not pre-parsed by any upstream middleware, parse using formidable
-      const storageRoot = path.resolve(ctx.baseDir, config.storagePath || 'data/memesluna')
+      const storageRoot = path.resolve(ctx.baseDir, 'data/memesluna')
       const tempDir = path.join(storageRoot, '.temp_upload')
       await fs.mkdir(tempDir, { recursive: true })
 
@@ -1391,6 +1465,7 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
 }
 
 export function apply(ctx: Context, config: Config) {
+  ;(ctx as any).on(MEMESLUNA_IMAGES_UPDATED, invalidateAllImagesCache)
   ctx.plugin(MemesLunaService, config)
   applyAutoCollect(ctx, config)
   applyStagingCleanup(ctx, config)
@@ -1500,6 +1575,8 @@ export function apply(ctx: Context, config: Config) {
     }
 
     let successCount = 0
+    let incompatibleCount = 0
+    let failedCount = 0
     const savedFilenames: string[] = []
     const rowsToAnnotate: any[] = []
 
@@ -1508,7 +1585,8 @@ export function apply(ctx: Context, config: Config) {
         const buffer = await downloadImage(ctx, url, 50 * 1024 * 1024)
         const ext = getExtFromMagicBytes(buffer)
         if (!ext) {
-          return '图片格式不兼容，仅支持 JPG/PNG/GIF/WEBP/BMP 格式图片（已拒绝 AVIF，且不会放入暂缓区）'
+          incompatibleCount++
+          continue
         }
 
         const result = await service.addLocalImageBuffer(name, buffer, `stole${ext}`)
@@ -1520,11 +1598,15 @@ export function apply(ctx: Context, config: Config) {
         })
         successCount++
       } catch (err) {
+        failedCount++
         ctx.logger('memesluna').error(`Failed to steal image from URL: ${url}`, err)
       }
     }
 
     if (successCount === 0) {
+      if (incompatibleCount > 0 && failedCount === 0) {
+        return '偷表情包失败，图片格式不兼容。仅支持 JPG/PNG/GIF/WEBP/BMP 格式图片（已拒绝 AVIF，且不会放入暂缓区）。'
+      }
       return '偷表情包失败，下载图片或上传保存时发生错误。'
     }
 
@@ -1532,7 +1614,13 @@ export function apply(ctx: Context, config: Config) {
       void service.queueAnnotation(rowsToAnnotate)
     }
 
-    return `成功偷了 ${successCount} 张表情包存入表情包 "${name}"！新文件名：${savedFilenames.join(', ')}`
+    const skippedHints = [
+      incompatibleCount ? `跳过 ${incompatibleCount} 张格式不兼容图片` : '',
+      failedCount ? `${failedCount} 张下载或保存失败` : '',
+    ].filter(Boolean)
+    const skippedText = skippedHints.length ? `（${skippedHints.join('，')}）` : ''
+
+    return `成功偷了 ${successCount} 张表情包存入表情包 "${name}"！${skippedText}新文件名：${savedFilenames.join(', ')}`
   }
 
   root
@@ -1691,6 +1779,7 @@ export function apply(ctx: Context, config: Config) {
 
       ctx.effect(() => () => {
         ;(ctx as any).chatluna.promptRenderer.removeVariable('endpoint')
+        ;(ctx as any).chatluna.promptRenderer.removeVariable('tag_routes')
         ;(ctx as any).chatluna.promptRenderer.removeVariable('memesluna')
       })
     })

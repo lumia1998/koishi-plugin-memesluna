@@ -25,7 +25,6 @@ aliases: 字符串数组（辅助检索）
 
 export interface Config {
   backendPath: string
-  storagePath?: string
   selfUrl: string
   injectVariables: boolean
   variableRefreshIntervalMs: number
@@ -42,6 +41,7 @@ export interface Config {
   model: string
   autoAnnotate: boolean
   annotatePrompt: string
+  enableEmotionTags: boolean
   synonymGroups: string[]
   aiConcurrency: number
   aiBatchDelay: number
@@ -67,19 +67,20 @@ export const Config: Schema<Config> = Schema.intersect([
       .description('ChatLuna 变量自动刷新间隔（毫秒），新增合集或路由后最多等待这么久才生效'),
     injectVariablesPrompt: Schema.string()
       .role('textarea')
-      .default(`你可以根据自己当前的心情或者动作从标签中选择合适的表情发送，也可以根据需要选择合适的表情包合集或端点。
+      .default(`你可以根据需要选择合适的表情包合集或端点发送图片。
 
 可用的路由如下：
 
 {endpoint}
 
+{tag_routes}
+
 使用规则：
-- 直接将路径拼接到 {base_url} 后即可，例如 {base_url}/memesluna/开心
-- 合集名和标签名不要重名，合集优先匹配
+- 直接将路径拼接到 {base_url} 后即可，例如 {base_url}/memesluna/合集名
 - 只使用上面列出的名称，不要自己编造路径
-- 标签路由按情绪跨合集随机返图，合集路由在指定合集内随机，端点路由转发到外部图源
+- 合集路由在指定合集内随机，端点路由转发到外部图源
 - 合集搜索：{base_url}/memesluna/合集名?q=关键词 可按语义搜索指定合集`)
-      .description('注入 ChatLuna 的提示词模板，支持占位符：{endpoint}（路由列表）、{base_url}（服务地址）、{tags}（所有可用标签）'),
+      .description('注入 ChatLuna 的提示词模板，支持占位符：{endpoint}（合集/端点路由）、{base_url}（服务地址）、{tag_routes}（情感标签路由提示，需开启）、{tags}（可用标签词，需开启）'),
   }).description('基础配置'),
 
   Schema.object({
@@ -142,6 +143,24 @@ export const Config: Schema<Config> = Schema.intersect([
       .role('textarea')
       .default(DEFAULT_ANNOTATE_PROMPT)
       .description('AI 标注的 System 提示词，要求模型输出 { aliases: string[], tags: string[] } 格式 JSON'),
+    aiConcurrency: Schema.number()
+      .min(1).max(10).default(2)
+      .description('AI 标注的并发请求数，越大速度越快但对模型负载更高'),
+    aiBatchDelay: Schema.number()
+      .min(0).max(5000).default(500)
+      .description('批量标注时每张图之间的等待时间（毫秒），用于避免触发模型限流'),
+    aiMaxAttempts: Schema.number()
+      .min(1).max(10).default(3)
+      .description('AI 标注失败后的最大重试次数'),
+    aiBackoffBase: Schema.number()
+      .min(100).max(10000).default(1000)
+      .description('重试退避基数（毫秒），每次重试等待时间 = 基数 × 重试次数'),
+  }).description('AI 标注配置'),
+
+  Schema.object({
+    enableEmotionTags: Schema.boolean()
+      .default(false)
+      .description('开启后才启用 /标签名 跨合集随机路由，并向 ChatLuna 注入情感标签提示；只会注入已有图片实际使用过的标签组'),
     synonymGroups: Schema.array(Schema.string())
       .role('table')
       .default([
@@ -162,19 +181,7 @@ export const Config: Schema<Config> = Schema.intersect([
         '求求,拜托,求你,拜托了',
       ])
       .description('同义词分组，每行一组，组内用逗号（, 或 ，）分隔；同组词会被合并为同一标签，也用于标签路由的跨词匹配'),
-    aiConcurrency: Schema.number()
-      .min(1).max(10).default(2)
-      .description('AI 标注的并发请求数，越大速度越快但对模型负载更高'),
-    aiBatchDelay: Schema.number()
-      .min(0).max(5000).default(500)
-      .description('批量标注时每张图之间的等待时间（毫秒），用于避免触发模型限流'),
-    aiMaxAttempts: Schema.number()
-      .min(1).max(10).default(3)
-      .description('AI 标注失败后的最大重试次数'),
-    aiBackoffBase: Schema.number()
-      .min(100).max(10000).default(1000)
-      .description('重试退避基数（毫秒），每次重试等待时间 = 基数 × 重试次数'),
-  }).description('AI 标注配置'),
+  }).description('情感标签配置').collapse(),
 ]) as Schema<Config>
 
 export const name = 'memesluna'

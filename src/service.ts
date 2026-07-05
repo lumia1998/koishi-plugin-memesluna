@@ -5,6 +5,8 @@ import { Context, Service, Eval } from 'koishi'
 import type { Config } from './config'
 import type { AIAnnotator } from './aiAnnotator'
 
+export const MEMESLUNA_IMAGES_UPDATED = 'memesluna/images-updated'
+
 export function sanitizeFilename(filename: string): string {
   const ext = path.extname(filename).toLowerCase()
   const base = path.basename(filename, ext)
@@ -236,6 +238,10 @@ export class MemesLunaService extends Service {
     return this._readyPromise
   }
 
+  private notifyImagesChanged() {
+    ;(this.ctx as any).emit(MEMESLUNA_IMAGES_UPDATED)
+  }
+
   setAnnotator(annotator: AIAnnotator): void {
     this._annotator = annotator
   }
@@ -258,6 +264,15 @@ export class MemesLunaService extends Service {
         const row = queue.shift()
         if (!row) break
         try {
+          const stored = row.id ? await this.getImageById(row.id) : null
+          if (stored) {
+            let aliases: string[] = []
+            let tags: string[] = []
+            try { const p = JSON.parse(stored.aliases || '[]'); aliases = Array.isArray(p) ? p : [] } catch {}
+            try { const p = JSON.parse(stored.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
+            if (aliases.length > 0 || tags.length > 0) continue
+          }
+
           const image = await this.getLocalImageBuffer(row.collection, row.filename)
           if (!image) continue
           const result = await this._annotator!.annotate(image.buffer, {
@@ -354,7 +369,7 @@ export class MemesLunaService extends Service {
   }
 
   private getStorageRoot() {
-    return path.resolve(this.ctx.baseDir, this.config.storagePath || 'data/memesluna')
+    return path.resolve(this.ctx.baseDir, 'data/memesluna')
   }
 
   private getStagingDir() {
@@ -652,10 +667,32 @@ export class MemesLunaService extends Service {
             return `${image.collection}/${image.filename}`
           } catch {
             await this.ctx.database.remove('memesluna_images', { id: image.id })
+            this.notifyImagesChanged()
           }
         } else {
           return `${image.collection}/${image.filename}`
         }
+      }
+    }
+
+    return null
+  }
+
+  private async getExistingImageRowByHash(hash: string, collectionName: string): Promise<any | null> {
+    if (!hash) return null
+
+    const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName, hash })
+    for (const row of rows) {
+      if (row.type === 'local') {
+        try {
+          await fs.access(this.resolveLocalImagePath(row.collection, row.value || row.filename))
+          return row
+        } catch {
+          await this.ctx.database.remove('memesluna_images', { id: row.id })
+          this.notifyImagesChanged()
+        }
+      } else {
+        return row
       }
     }
 
@@ -821,6 +858,7 @@ export class MemesLunaService extends Service {
     const dir = this.getCollectionDir(collectionName)
     try {
       await fs.mkdir(dir)
+      this.notifyImagesChanged()
       return true
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
@@ -836,6 +874,7 @@ export class MemesLunaService extends Service {
     try {
       await fs.rm(dir, { recursive: true, force: true })
       await this.ctx.database.remove('memesluna_images', { collection: collectionName })
+      this.notifyImagesChanged()
       return true
     } catch {
       return false
@@ -1010,6 +1049,7 @@ export class MemesLunaService extends Service {
         addedCount++
       }
     }
+    if (addedCount > 0) this.notifyImagesChanged()
     return addedCount
   }
 
@@ -1025,6 +1065,7 @@ export class MemesLunaService extends Service {
     }
 
     await this.ctx.database.remove('memesluna_images', { collection: collectionName, value: link, type: 'external' })
+    this.notifyImagesChanged()
     return true
   }
 
@@ -1123,12 +1164,11 @@ export class MemesLunaService extends Service {
     }
 
     const fingerprints = await this.getImageFingerprints(buffer)
-    const duplicate = await this.getDuplicateImageByHash(fingerprints.hash, { includeStaged: false, includeImages: true, collection: collectionName })
+    const duplicate = await this.getExistingImageRowByHash(fingerprints.hash, collectionName)
+    const preservedAliases = duplicate?.aliases || '[]'
+    const preservedTags = duplicate?.tags || '[]'
     if (duplicate) {
-      const parts = duplicate.split('/')
-      if (parts.length === 2) {
-        await this.deleteImageFromCollection(parts[0], parts[1])
-      }
+      await this.deleteImageFromCollection(duplicate.collection, duplicate.filename)
     }
 
     // Determine the next index
@@ -1158,10 +1198,11 @@ export class MemesLunaService extends Service {
       value: finalName,
       mime: this.getMimeByFilename(finalName),
       ...fingerprints,
-      aliases: '[]',
-      tags: '[]',
+      aliases: preservedAliases,
+      tags: preservedTags,
       created_at: new Date(),
     })
+    this.notifyImagesChanged()
 
     return { id, filename: finalName }
   }
@@ -1180,6 +1221,7 @@ export class MemesLunaService extends Service {
     if (aliases !== undefined) update.aliases = JSON.stringify(aliases)
     if (tags !== undefined) update.tags = JSON.stringify(tags)
     await this.ctx.database.set('memesluna_images', { id }, update)
+    this.notifyImagesChanged()
     return true
   }
 
@@ -1361,6 +1403,7 @@ export class MemesLunaService extends Service {
     }
 
     await this.ctx.database.remove('memesluna_images', { id: image.id })
+    this.notifyImagesChanged()
     return true
   }
 
@@ -1407,6 +1450,7 @@ export class MemesLunaService extends Service {
           filename: targetFilename,
           value: targetFilename,
         })
+        this.notifyImagesChanged()
         return targetFilename
       } catch {
         return null
