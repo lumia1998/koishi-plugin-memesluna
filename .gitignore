@@ -16,6 +16,9 @@ yarn-error.log*
 pnpm-debug.log*
 *.log
 
+# Local scratch files
+diff.txt
+
 # Environment / local settings
 .env
 .env.*

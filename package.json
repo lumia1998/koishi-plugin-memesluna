@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-memesluna",
   "description": "Image Forward service for Koishi with ChatLuna integration",
-  "version": "0.5.10",
+  "version": "0.6.0-alpha.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "types": "lib/index.d.ts",
@@ -27,7 +27,10 @@
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "license": "MIT",
   "keywords": [
@@ -50,8 +53,10 @@
     "@koishijs/client": "^5.30.11",
     "@koishijs/plugin-console": "^5.30.11",
     "@koishijs/plugin-server": "^3.2.7",
+    "@vitest/coverage-v8": "^1.6.1",
     "koishi": "^4.18.9",
     "typescript": "^5.0.0",
+    "vitest": "^1.6.1",
     "yakumo": "^1.0.0",
     "yakumo-esbuild": "^1.0.0",
     "yakumo-tsc": "^1.0.0"

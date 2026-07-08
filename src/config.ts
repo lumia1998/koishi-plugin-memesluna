@@ -10,17 +10,18 @@ export const DEFAULT_ANNOTATE_PROMPT = `你是"二次元表情检索标注助手
 
 字段要求：
 
-tags: 字符串数组（★ 只能包含 EXACTLY 1 个元素，且必须从候选列表中选择一个，绝对不能使用候选列表外的任何词）
-- 候选列表：{{allowed_tags}}
+tags: 字符串数组（自由语义标签）
+- 1~5 项，每项 1~8 字
+- 用于概括图片的核心情绪、动作、场景或梗点
+- 不需要从固定候选中选择，不要堆砌近义词
 
 aliases: 字符串数组（辅助检索）
 - 至少 6 项检索短语，每项 2~10 字
-- 用于合集中的 ?q=关键词 语义搜索
+- 用于 /memesluna?q=关键词 或 合集路由 ?q=关键词 的直接关键字搜索
 - 包含口语说法、情绪短语、动作短语
 
 约束：
 - 以图像事实为准，不要把"幸福"标给明显"无奈/委屈"的图
-- 标签(tags)必须在候选列表中选择一个最符合图片情绪或内容的标签，且数组长度必须为 1
 - 只返回合法 JSON，格式：{"aliases": [...], "tags": [...]}`
 
 export interface Config {
@@ -39,14 +40,13 @@ export interface Config {
   similarityThreshold: number
   stagingRetentionDays: number
   model: string
-  autoAnnotate: boolean
   annotatePrompt: string
-  enableEmotionTags: boolean
-  synonymGroups: string[]
   aiConcurrency: number
   aiBatchDelay: number
   aiMaxAttempts: number
   aiBackoffBase: number
+  aiDailyLimit: number
+  aiWarnThreshold: number
 }
 
 export const Config: Schema<Config> = Schema.intersect([
@@ -73,14 +73,14 @@ export const Config: Schema<Config> = Schema.intersect([
 
 {endpoint}
 
-{tag_routes}
-
 使用规则：
-- 直接将路径拼接到 {base_url} 后即可，例如 {base_url}/memesluna/合集名
-- 只使用上面列出的名称，不要自己编造路径
-- 合集路由在指定合集内随机，端点路由转发到外部图源
-- 合集搜索：{base_url}/memesluna/合集名?q=关键词 可按语义搜索指定合集`)
-      .description('注入 ChatLuna 的提示词模板，支持占位符：{endpoint}（合集/端点路由）、{base_url}（服务地址）、{tag_routes}（情感标签路由提示，需开启）、{tags}（可用标签词，需开启）'),
+- 合集和端点都可以直接访问：{base_url}{backend_path}/合集名 或 {base_url}{backend_path}/端点名
+- 只使用上面列出的合集名或端点名，不要自己编造路径
+- 合集路由会在指定合集内随机返回图片，端点路由会转发到外部图源
+- 需要按语义找图时，再使用搜索参数：
+  - 跨合集搜索：{base_url}{backend_path}?q=关键词
+  - 合集搜索：{base_url}{backend_path}/合集名?q=关键词`)
+      .description('注入 ChatLuna 的提示词模板，支持占位符：{endpoint}（合集/端点路由）、{base_url}（服务地址）、{backend_path}（插件路由前缀）；兼容旧占位符 {tag_routes}、{tags}，当前会渲染为空'),
   }).description('基础配置'),
 
   Schema.object({
@@ -135,10 +135,7 @@ export const Config: Schema<Config> = Schema.intersect([
 
   Schema.object({
     model: Schema.dynamic('model')
-      .description('AI 标注使用的模型，需已在 ChatLuna 中配置'),
-    autoAnnotate: Schema.boolean()
-      .default(false)
-      .description('上传图片时自动触发 AI 语义标注（生成 tags 和 aliases），需先配置模型'),
+      .description('AI 标注使用的模型，配置后上传、偷图和暂缓区归档会自动触发标注'),
     annotatePrompt: Schema.string()
       .role('textarea')
       .default(DEFAULT_ANNOTATE_PROMPT)
@@ -155,34 +152,13 @@ export const Config: Schema<Config> = Schema.intersect([
     aiBackoffBase: Schema.number()
       .min(100).max(10000).default(1000)
       .description('重试退避基数（毫秒），每次重试等待时间 = 基数 × 重试次数'),
+    aiDailyLimit: Schema.number()
+      .min(0).max(10000).default(1000)
+      .description('每日 AI 标注次数上限，0 表示不限制（建议设置以控制成本）'),
+    aiWarnThreshold: Schema.number()
+      .min(0).max(1).step(0.1).default(0.8)
+      .description('AI 标注用量警告阈值（0-1），达到此比例时发出警告'),
   }).description('AI 标注配置'),
-
-  Schema.object({
-    enableEmotionTags: Schema.boolean()
-      .default(false)
-      .description('开启后才启用 /标签名 跨合集随机路由，并向 ChatLuna 注入情感标签提示；只会注入已有图片实际使用过的标签组'),
-    synonymGroups: Schema.array(Schema.string())
-      .role('table')
-      .default([
-        '幸福,开心,高兴,快乐,治愈,满足',
-        '委屈,难过,伤心,沮丧,流泪,大哭',
-        '生气,愤怒,炸毛,不爽,恼火,气愤',
-        '可爱,萌,卖萌,软萌',
-        '害羞,脸红,羞涩,不好意思',
-        '无语,尴尬,流汗,擦汗,汗,额',
-        '震惊,惊讶,吃惊,吓到,呆住,懵逼,傻眼',
-        '疑惑,问号,疑问,不解,纳闷,什么',
-        '得意,哈哈,嘲笑,狂妄,神气,叉腰,嚣张',
-        '赞,好,棒,点赞,强,厉害,牛逼,给力',
-        '贴贴,喜欢,爱你,心动,比心,示爱,抱抱',
-        '吃货,吃,美味,饿,零食,喂食,干饭',
-        '摆烂,咸鱼,躺平,不想动,无所谓,累了,疲惫',
-        '害怕,发抖,瑟瑟发抖,惊恐,怂,慌张',
-        '求求,拜托,求你,拜托了',
-      ])
-      .description('同义词分组，每行一组，组内用逗号（, 或 ，）分隔；同组词会被合并为同一标签，也用于标签路由的跨词匹配'),
-  }).description('情感标签配置').collapse(),
 ]) as Schema<Config>
 
 export const name = 'memesluna'
-

@@ -8,6 +8,14 @@ import { Context, h } from 'koishi'
 import { Config } from './config'
 import { MEMESLUNA_IMAGES_UPDATED, MemesLunaService, hashImageBuffer, isReservedPath } from './service'
 import { AIAnnotator } from './aiAnnotator'
+import {
+  ALL_IMAGES_CACHE_TTL,
+  MAX_METADATA_ALIASES,
+  MAX_METADATA_ITEM_LENGTH,
+  MAX_METADATA_TAGS,
+  SEARCH_SCORE_THRESHOLD,
+  SEARCH_SCORING,
+} from './constants'
 import formidable from 'formidable'
 
 function guessMimeByExt(filePath: string): string {
@@ -30,19 +38,22 @@ function guessMimeByExt(filePath: string): string {
   }
 }
 
-function getTagRepresentative(tag: string, synonymGroups: string[][]): string | null {
-  const normTag = tag.trim().toLowerCase()
-  for (const group of synonymGroups) {
-    if (group.some(member => member.trim().toLowerCase() === normTag)) {
-      return group[0] // First word as representative
-    }
-  }
-  return null
-}
+function isPrivateIP(hostname: string): boolean {
+  // IPv4 私有地址检测
+  if (/^127\./.test(hostname)) return true // 127.0.0.0/8
+  if (/^10\./.test(hostname)) return true // 10.0.0.0/8
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true // 172.16.0.0/12
+  if (/^192\.168\./.test(hostname)) return true // 192.168.0.0/16
+  if (/^169\.254\./.test(hostname)) return true // 169.254.0.0/16 (链路本地)
+  if (hostname === 'localhost') return true
 
-/** 将配置中的同义词组字符串数组解析为二维数组 */
-function parseSynonymGroups(rawGroups: string[]): string[][] {
-  return rawGroups.map(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
+  // IPv6 私有地址检测
+  if (/^::1$/.test(hostname)) return true // 回环
+  if (/^fe80:/i.test(hostname)) return true // 链路本地
+  if (/^fc00:/i.test(hostname)) return true // 唯一本地地址
+  if (/^fd00:/i.test(hostname)) return true // 唯一本地地址
+
+  return false
 }
 
 async function downloadImage(ctx: Context, url: string, maxBytes?: number): Promise<Buffer> {
@@ -56,6 +67,25 @@ async function downloadImage(ctx: Context, url: string, maxBytes?: number): Prom
       throw new Error(`Data URL size exceeds maximum limit of ${maxBytes} bytes`)
     }
     return buffer
+  }
+
+  // SSRF 防护：检查 URL 合法性
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(url)
+  } catch {
+    throw new Error('Invalid URL format')
+  }
+
+  // 只允许 http 和 https 协议
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+    throw new Error(`Protocol ${parsedUrl.protocol} is not allowed`)
+  }
+
+  // 禁止访问私有 IP 地址
+  const hostname = parsedUrl.hostname
+  if (isPrivateIP(hostname)) {
+    throw new Error('Access to private IP addresses is not allowed')
   }
 
   let lastError: Error | null = null
@@ -136,16 +166,15 @@ function splitTerms(input: string): string[] {
   return Array.from(new Set(terms.filter((t) => t.length > 0)))
 }
 
-function expandTerms(terms: string[], synonymGroups: string[][]): string[] {
-  const expanded = new Set<string>(terms)
-  for (const term of terms) {
-    for (const group of synonymGroups) {
-      if (group.includes(term)) {
-        for (const item of group) expanded.add(item)
-      }
-    }
+function parseJsonStringArray(value: unknown): string[] {
+  if (typeof value !== 'string') return []
+  try {
+    const parsed = JSON.parse(value)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((item): item is string => typeof item === 'string')
+  } catch {
+    return []
   }
-  return Array.from(expanded)
 }
 
 interface RankedImage {
@@ -156,22 +185,18 @@ interface RankedImage {
 
 function rankImagesByQuery(
   images: any[],
-  query: string,
-  synonymGroups: string[][]
+  query: string
 ): RankedImage[] {
   const rawQuery = query.trim()
   if (!rawQuery) return []
 
   const phrase = flattenText(rawQuery)
-  const terms = expandTerms(splitTerms(rawQuery), synonymGroups)
+  const terms = splitTerms(rawQuery)
   const ranked: RankedImage[] = []
 
   for (const image of images) {
-    let aliases: string[] = []
-    let tags: string[] = []
-
-    try { const p = JSON.parse(image.aliases || '[]'); aliases = Array.isArray(p) ? p : [] } catch {}
-    try { const p = JSON.parse(image.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
+    const aliases = parseJsonStringArray(image.aliases)
+    const tags = parseJsonStringArray(image.tags)
 
     const aliasesFlat = aliases.map((a: string) => flattenText(a))
     const tagsFlat = tags.map((t: string) => flattenText(t))
@@ -181,9 +206,9 @@ function rankImagesByQuery(
     const matchedTerms = new Set<string>()
 
     if (phrase.length >= 2) {
-      if (aliasesFlat.some((a: string) => a.includes(phrase))) score += 12
-      if (tagsFlat.some((t: string) => t.includes(phrase))) score += 8
-      if (filenameFlat.includes(phrase)) score += 4
+      if (aliasesFlat.some((a: string) => a.includes(phrase))) score += SEARCH_SCORING.PHRASE_ALIAS
+      if (tagsFlat.some((t: string) => t.includes(phrase))) score += SEARCH_SCORING.PHRASE_TAG
+      if (filenameFlat.includes(phrase)) score += SEARCH_SCORING.PHRASE_FILENAME
     }
 
     for (const term of terms) {
@@ -191,14 +216,14 @@ function rankImagesByQuery(
       if (!t) continue
 
       let matched = false
-      if (aliasesFlat.some((a: string) => a.includes(t))) { score += 6; matched = true }
-      if (tagsFlat.some((tag: string) => tag.includes(t))) { score += 4; matched = true }
-      if (filenameFlat.includes(t)) { score += 2; matched = true }
+      if (aliasesFlat.some((a: string) => a.includes(t))) { score += SEARCH_SCORING.TERM_ALIAS; matched = true }
+      if (tagsFlat.some((tag: string) => tag.includes(t))) { score += SEARCH_SCORING.TERM_TAG; matched = true }
+      if (filenameFlat.includes(t)) { score += SEARCH_SCORING.TERM_FILENAME; matched = true }
       if (matched) matchedTerms.add(term)
     }
 
-    if (matchedTerms.size >= 2) score += 2
-    if (matchedTerms.size >= 3) score += 2
+    if (matchedTerms.size >= 2) score += SEARCH_SCORING.BONUS_TWO_TERMS
+    if (matchedTerms.size >= 3) score += SEARCH_SCORING.BONUS_THREE_TERMS
 
     if (score > 0) {
       ranked.push({ image, score, matchedTerms: Array.from(matchedTerms) })
@@ -209,105 +234,13 @@ function rankImagesByQuery(
   return ranked
 }
 
-function parseImageTags(image: any): string[] {
-  try { const p = JSON.parse(image.tags || '[]'); return Array.isArray(p) ? p : [] } catch { return [] }
-}
-
-async function getRealImageTags(ctx: Context): Promise<string[]> {
-  const realTags = new Set<string>()
-  try {
-    const rows = await ctx.database.get('memesluna_images', {})
-    for (const row of rows) {
-      for (const tag of parseImageTags(row)) {
-        const trimmed = tag.trim()
-        if (trimmed) realTags.add(trimmed)
-      }
-    }
-  } catch (err) {
-    ctx.logger('memesluna').warn('Failed to fetch image tags for prompt rendering:', err)
-  }
-  return Array.from(realTags)
-}
-
-function getAvailableTagGroups(realTags: string[], synonymGroups: string[][]): string[][] {
-  const realTagLowerSet = new Set(realTags.map((tag) => tag.toLowerCase()))
-  const groupedTagLowerSet = new Set<string>()
-  const availableGroups: string[][] = []
-
-  for (const group of synonymGroups) {
-    const normalizedGroup = Array.from(new Set(group.map((tag) => tag.trim()).filter(Boolean)))
-    if (!normalizedGroup.length) continue
-
-    const groupLower = normalizedGroup.map((tag) => tag.toLowerCase())
-    for (const tag of groupLower) groupedTagLowerSet.add(tag)
-
-    if (groupLower.some((tag) => realTagLowerSet.has(tag))) {
-      availableGroups.push(normalizedGroup)
-    }
-  }
-
-  for (const tag of realTags) {
-    if (!groupedTagLowerSet.has(tag.toLowerCase())) {
-      availableGroups.push([tag])
-    }
-  }
-
-  return availableGroups
-}
-
-async function getAvailableEmotionTagGroups(ctx: Context, config: Config): Promise<string[][]> {
-  if (!config.enableEmotionTags) return []
-  const realTags = await getRealImageTags(ctx)
-  if (!realTags.length) return []
-  return getAvailableTagGroups(realTags, parseSynonymGroups(config.synonymGroups || []))
-}
-
-function renderEmotionTagRoutes(
-  tagGroups: string[][],
-  backendPath: string
-): { text: string; tags: string } {
-  const normalizedGroups = tagGroups
-    .map((group) => Array.from(new Set(group.map((tag) => tag.trim()).filter(Boolean))))
-    .filter((group) => group.length > 0)
-
-  const tags = Array.from(new Set(normalizedGroups.flat())).join('、')
-  if (!normalizedGroups.length) {
-    return { text: '', tags }
-  }
-
-  const lines = normalizedGroups.map((group) => `  ${group.join(' / ')}`)
-  return {
-    tags,
-    text: `【情绪/标签】（每行为同一组，组内任意词均可作为路由）\n${lines.join('\n')}\n  标签路由格式：${backendPath}/标签名`,
-  }
-}
-
 function getInjectVariablesPromptTemplate(config: Config): string {
-  const template = config.injectVariablesPrompt || ''
-  if (config.enableEmotionTags) return template
-
-  return template
-    .replace(
-      '你可以根据自己当前的心情或者动作从标签中选择合适的表情发送，也可以根据需要选择合适的表情包合集或端点。',
-      '你可以根据需要选择合适的表情包合集或端点发送图片。'
-    )
-    .split(/\r?\n/g)
-    .filter((line) => {
-      const compact = line.replace(/\s+/g, '')
-      return !(
-        compact.includes('{base_url}/memesluna/开心') ||
-        compact.includes('{base_url}/memesluna/标签名') ||
-        compact.includes('合集名和标签名不要重名') ||
-        compact.includes('标签路由按情绪跨合集随机返图')
-      )
-    })
-    .join('\n')
+  return config.injectVariablesPrompt || ''
 }
 
-// ── 全表扫描缓存（TTL 30s），避免每次 HTTP 请求都打数据库 ──
+// ── 全表扫描缓存，避免每次 HTTP 请求都打数据库 ──
 let _allImagesCacheTime = 0
 let _allImagesCache: any[] = []
-const ALL_IMAGES_CACHE_TTL = 30 * 1000
 
 async function getAllImagesCached(ctx: Context): Promise<any[]> {
   const now = Date.now()
@@ -322,34 +255,36 @@ function invalidateAllImagesCache() {
   _allImagesCacheTime = 0
 }
 
-async function findByTag(
+async function findByQuery(
   ctx: Context,
-  tagName: string,
   config: Config,
   service: MemesLunaService,
-  requestOrigin?: string
+  query: string,
+  requestOrigin?: string,
+  collectionName?: string
 ): Promise<{ redirectTo: string } | null> {
-  const allImages = await getAllImagesCached(ctx)
-  const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
+  const rawQuery = query.trim()
+  if (!rawQuery) return null
 
-  const normTagName = tagName.trim().toLowerCase()
-  const targetGroup = synonymGroups.find(group => group.some(member => member.trim().toLowerCase() === normTagName))
-  const allowedTags = targetGroup ? new Set(targetGroup.map(t => t.toLowerCase())) : new Set([normTagName])
+  const images = collectionName
+    ? await ctx.database.get('memesluna_images', { collection: collectionName })
+    : await getAllImagesCached(ctx)
+  if (!images.length) return null
 
-  const matched = allImages.filter((img: any) => {
-    const tags = parseImageTags(img)
-    return tags.some((t: string) => allowedTags.has(t.trim().toLowerCase()))
-  })
+  const ranked = rankImagesByQuery(images, rawQuery)
+  const qualified = ranked.filter((item) => item.score >= SEARCH_SCORE_THRESHOLD)
+  if (!qualified.length) return null
 
-  if (!matched.length) return null
-
-  const pick = matched[Math.floor(Math.random() * matched.length)]
-  const resource = await service.getResourceByRow(pick)
+  const maxScore = Math.max(...qualified.map((item) => item.score))
+  const topMatches = qualified.filter((item) => item.score === maxScore)
+  const pick = topMatches[Math.floor(Math.random() * topMatches.length)]
+  const resource = await service.getResourceByRow(pick.image)
   if (!resource) return null
 
   if (resource.type === 'external') return { redirectTo: resource.value }
 
-  const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(pick.collection)}/images/${encodeURIComponent(resource.filename || '')}`
+  const collection = pick.image.collection || collectionName || ''
+  const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(collection)}/images/${encodeURIComponent(resource.filename || '')}`
   return { redirectTo: localUrl }
 }
 
@@ -365,11 +300,6 @@ async function applyDynamicForward(
   const isCollection = await service.collectionExists(routeName)
 
   if (!endpoint && !isCollection) {
-    if (config.enableEmotionTags) {
-      // 尝试按标签查找（跨合集）
-      const tagResult = await findByTag(ctx, routeName, config, service, requestOrigin)
-      if (tagResult) return tagResult
-    }
     return { notFound: true }
   }
 
@@ -387,21 +317,8 @@ async function applyDynamicForward(
 
   const query = typeof _query?.q === 'string' ? _query.q.trim() : ''
   if (query && isCollection) {
-    const images = await ctx.database.get('memesluna_images', { collection: routeName })
-    if (images.length > 0) {
-      const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
-      const ranked = rankImagesByQuery(images, query, synonymGroups)
-      const qualified = ranked.filter((item) => item.score >= 6)
-      if (qualified.length > 0) {
-        const pick = qualified[Math.floor(Math.random() * qualified.length)]
-        const resource = await service.getResourceByRow(pick.image)
-        if (resource) {
-          if (resource.type === 'external') return { redirectTo: resource.value }
-          const localUrl = `${getLocalBaseUrl(ctx, config, requestOrigin)}${config.backendPath}/api/collections/${encodeURIComponent(routeName)}/images/${encodeURIComponent(resource.filename || '')}`
-          return { redirectTo: localUrl }
-        }
-      }
-    }
+    const queryResult = await findByQuery(ctx, config, service, query, requestOrigin, routeName)
+    if (queryResult) return queryResult
   }
 
   const resource = await service.getRandomResource(routeName)
@@ -461,6 +378,25 @@ function toStringArray(value: unknown): string[] {
   return value
     .map((item) => (typeof item === 'string' ? item.trim() : ''))
     .filter((item) => item.length > 0)
+}
+
+function normalizeMetadataList(value: string[], maxItems: number, maxLength: number): string[] {
+  const result: string[] = []
+  const seen = new Set<string>()
+
+  for (const item of value) {
+    const normalized = typeof item === 'string' ? item.trim().replace(/\s+/g, ' ') : ''
+    if (!normalized || normalized.length > maxLength) continue
+
+    const key = normalized.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(normalized)
+
+    if (result.length >= maxItems) break
+  }
+
+  return result
 }
 
 interface AutoCollectFrequencyRecord {
@@ -567,17 +503,15 @@ async function updateMemesVariable(ctx: Context, config: Config, service: MemesL
 
   const baseUrl = toAbsoluteBaseUrl(ctx, config)
   const inventory = await service.buildRouteInventory(config.backendPath)
-  const tagGroups = await getAvailableEmotionTagGroups(ctx, config)
-  const { text: tagRoutes, tags: tagsStr } = renderEmotionTagRoutes(tagGroups, config.backendPath)
 
   ;(ctx as any).chatluna.promptRenderer.setVariable('endpoint', inventory || '- 暂无可用路由')
-  ;(ctx as any).chatluna.promptRenderer.setVariable('tag_routes', tagRoutes)
 
   const memeslunaText = getInjectVariablesPromptTemplate(config)
     .replaceAll('{endpoint}', inventory || '- 暂无可用路由')
     .replaceAll('{base_url}', baseUrl)
-    .replaceAll('{tag_routes}', tagRoutes)
-    .replaceAll('{tags}', tagsStr)
+    .replaceAll('{backend_path}', config.backendPath)
+    .replaceAll('{tag_routes}', '')
+    .replaceAll('{tags}', '')
 
   ;(ctx as any).chatluna.promptRenderer.setVariable('memesluna', memeslunaText)
 }
@@ -622,8 +556,6 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
         endpoints,
         collections: detailedCollections.filter(Boolean),
         stagedImages,
-        enableEmotionTags: config.enableEmotionTags,
-        synonymGroups: config.synonymGroups,
       }
     })
   )
@@ -788,14 +720,9 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
       const currentTags: string[] = (() => { try { const p = JSON.parse(rows[0].tags || '[]'); return Array.isArray(p) ? p : [] } catch { return [] } })()
 
       const mergedAliases = aliases ?? currentAliases
-      let mergedTags = tags ?? currentTags
-
-      if (tags !== undefined) {
-        const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
-        const allCandidates = new Set(synonymGroups.flatMap(group => group))
-        const validTags = tags.map(t => t.trim()).filter(t => allCandidates.has(t))
-        mergedTags = validTags.slice(0, 1)
-      }
+      const mergedTags = tags?.length
+        ? normalizeMetadataList(tags, MAX_METADATA_TAGS, MAX_METADATA_ITEM_LENGTH)
+        : (tags !== undefined ? [] : currentTags)
 
       await service.updateImageAnnotation(rows[0].id, mergedAliases, mergedTags)
       return { ok: true, aliases: mergedAliases, tags: mergedTags }
@@ -817,84 +744,7 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
     })
   )
 
-  consoleService.addListener(
-    'memesluna/getTagSummary',
-    withReady(async () => {
-      const rows = await ctx.database.get('memesluna_images', {})
-      const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
-
-      const tagMap = new Map<string, { count: number; previewUrls: string[]; groupIndex: number; synonymWords: string[] }>()
-
-      for (const row of rows) {
-        let tags: string[] = []
-        try { const p = JSON.parse(row.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
-        
-        // Find unique representatives for this image's tags to group them together
-        const imageReps = new Set<string>()
-        for (const tag of tags) {
-          const rep = getTagRepresentative(tag, synonymGroups)
-          if (rep) {
-            imageReps.add(rep)
-          }
-        }
-
-        for (const rep of imageReps) {
-          if (!tagMap.has(rep)) {
-            // Find group index and all synonym words for this representative
-            const groupIdx = synonymGroups.findIndex(g => g[0] === rep)
-            const synonymWords = groupIdx >= 0 ? synonymGroups[groupIdx] : [rep]
-            tagMap.set(rep, { count: 0, previewUrls: [], groupIndex: groupIdx, synonymWords })
-          }
-          const entry = tagMap.get(rep)!
-          entry.count++
-          if (entry.previewUrls.length < 6) {
-            const bp = config.backendPath || '/memesluna'
-            entry.previewUrls.push(`${bp}/api/collections/${encodeURIComponent(row.collection)}/images/${encodeURIComponent(row.filename)}`)
-          }
-        }
-      }
-
-      const result = Array.from(tagMap.entries())
-        .map(([tag, data]) => ({
-          tag,
-          count: data.count,
-          previewUrls: data.previewUrls,
-          groupIndex: data.groupIndex,
-          synonymWords: data.synonymWords,
-        }))
-        .sort((a, b) => b.count - a.count)
-
-      return result
-    })
-  )
-
-  consoleService.addListener(
-    'memesluna/getImagesByTag',
-    withReady(async (tag: string) => {
-      const rows = await ctx.database.get('memesluna_images', {})
-      const matched: Array<{ collection: string; filename: string; tags: string[]; imageUrl: string }> = []
-      const bp = config.backendPath || '/memesluna'
-
-      const synonymGroups = parseSynonymGroups(config.synonymGroups || [])
-      const targetGroup = synonymGroups.find(group => group[0]?.toLowerCase() === tag.toLowerCase())
-      const allowedTagsInGroup = targetGroup ? new Set(targetGroup.map(t => t.toLowerCase())) : new Set([tag.toLowerCase()])
-
-      for (const row of rows) {
-        let tags: string[] = []
-        try { const p = JSON.parse(row.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
-        if (tags.some((t: string) => allowedTagsInGroup.has(t.toLowerCase()))) {
-          matched.push({
-            collection: row.collection,
-            filename: row.filename,
-            tags,
-            imageUrl: `${bp}/api/collections/${encodeURIComponent(row.collection)}/images/${encodeURIComponent(row.filename)}`,
-          })
-        }
-      }
-
-      return { tag, total: matched.length, images: matched }
-    })
-  )
+  // v0.6.0: 已移除 getTagSummary 和 getImagesByTag RPC（标签视图已废弃）
 }
 
 function applyAutoCollect(ctx: Context, config: Config) {
@@ -997,27 +847,26 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     const collections = await service.getCollections()
     const collectionInfos = await Promise.all(collections.map((name) => service.getCollectionInfo(name)))
     const inventory = await service.buildRouteInventory(basePath)
-    const tagGroups = await getAvailableEmotionTagGroups(ctx, config)
-    const { text: tagRoutes, tags: tagsStr } = renderEmotionTagRoutes(tagGroups, basePath)
 
     const llmPrompt = getInjectVariablesPromptTemplate(config)
       .replaceAll('{endpoint}', inventory || '- 暂无可用路由')
       .replaceAll('{base_url}', baseUrl)
-      .replaceAll('{tag_routes}', tagRoutes)
-      .replaceAll('{tags}', tagsStr)
+      .replaceAll('{backend_path}', config.backendPath)
+      .replaceAll('{tag_routes}', '')
+      .replaceAll('{tags}', '')
 
     koa.body = {
       llmPrompt,
       routeInventory: inventory,
-      tagRoutes,
+      tagRoutes: '',
       endpoints,
       collections: collectionInfos.filter(Boolean),
     }
   })
 
-    ctx.server.get(`${basePath}/api/admin/state`, async (koa) => {
-      koa.body = await buildAdminState(service)
-    })
+  ctx.server.get(`${basePath}/api/admin/state`, async (koa) => {
+    koa.body = await buildAdminState(service)
+  })
 
   ctx.server.post(`${basePath}/api/admin/collections`, async (koa) => {
     const body = getRequestBody(koa)
@@ -1145,7 +994,7 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
     // 1. Check if the upstream server middleware has already parsed the files
     const request = koa.request as any
     const parsedFiles = request.files || request.body?.files || request.body?.images
-    
+
     if (parsedFiles) {
       const fileField = parsedFiles.images || parsedFiles.file || parsedFiles.files || parsedFiles
       if (fileField) {
@@ -1224,7 +1073,7 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
         await fs.unlink(filePath).catch(() => {})
       }
 
-      if (service.annotator && config.autoAnnotate && rowsToAnnotate.length > 0) {
+      if (service.annotator && rowsToAnnotate.length > 0) {
         void service.queueAnnotation(rowsToAnnotate)
       }
 
@@ -1417,6 +1266,13 @@ function applyServer(ctx: Context, config: Config, service: MemesLunaService) {
   })
 
   ctx.server.get(`${basePath}/`, async (koa) => {
+    const query = typeof koa.request.query?.q === 'string' ? koa.request.query.q.trim() : ''
+    if (query) {
+      const result = await findByQuery(ctx, config, service, query, koa.request.origin)
+      setKoaResponse(koa, result || { notFound: true })
+      return
+    }
+
     koa.redirect('/console/memesluna')
   })
 
@@ -1522,28 +1378,6 @@ export function apply(ctx: Context, config: Config) {
       return lines.join('\n')
     })
 
-  root
-    .subcommand('.add <name:string> [description:string]', '快速创建表情包')
-    .alias('.create')
-    .alias('.creat')
-    .action(async ({ session }, name, description) => {
-      if (!name) return '请输入表情包名称，例如: memesluna.add cool_emojis'
-      const service = ctx.memesluna
-      await service.ready
-      try {
-        const created = await service.createCollection(name)
-        if (!created) {
-          return `表情包 "${name}" 已存在。`
-        }
-        if (description) {
-          await service.setCollectionDescription(name, description)
-        }
-        return `表情包 "${name}" 创建成功！${description ? `描述为: ${description}` : ''}`
-      } catch (err) {
-        return `创建表情包失败: ${(err as Error).message}`
-      }
-    })
-
   const stoleAction = async (session: any, name: string) => {
     if (!session) return
     if (!name) {
@@ -1555,10 +1389,10 @@ export function apply(ctx: Context, config: Config) {
 
     try {
       if (!(await service.collectionExists(name))) {
-        await service.createCollection(name)
+        return `表情包合集 "${name}" 不存在，请先在 Koishi Console 的 MemesLuna 页面创建。`
       }
     } catch (err) {
-      return `检查/创建表情包失败: ${(err as Error).message}`
+      return `检查表情包失败: ${(err as Error).message}`
     }
 
     let imageUrls: string[] = []
@@ -1610,7 +1444,7 @@ export function apply(ctx: Context, config: Config) {
       return '偷表情包失败，下载图片或上传保存时发生错误。'
     }
 
-    if (service.annotator && config.autoAnnotate && rowsToAnnotate.length > 0) {
+    if (service.annotator && rowsToAnnotate.length > 0) {
       void service.queueAnnotation(rowsToAnnotate)
     }
 
@@ -1626,25 +1460,7 @@ export function apply(ctx: Context, config: Config) {
   root
     .subcommand('.stole <name:string>', '偷取引用消息中的图片并存入指定表情包')
     .action(async ({ session }, name) => {
-      const result = await stoleAction(session, name)
-      // 偷图成功后，如果开启了自动标注，异步触发标注队列（不阻塞回复）
-      if (result && typeof result === 'string' && result.includes('成功偷了') && config.autoAnnotate) {
-        const service = ctx.memesluna
-        const annotator = service.annotator
-        if (annotator) {
-          const rows = await ctx.database.get('memesluna_images', { collection: name })
-          const targets = rows.filter((img) => {
-            let tags: string[] = []
-            try { const p = JSON.parse(img.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
-            return tags.length === 0 && img.type === 'local'
-          })
-          // 异步标注，不 await
-          void service.queueAnnotation(targets).catch((err) => {
-            ctx.logger('memesluna').warn('stole auto-annotate failed:', err)
-          })
-        }
-      }
-      return result
+      return await stoleAction(session, name)
     })
 
   root
@@ -1793,8 +1609,3 @@ export const inject = {
   required: ['database', 'chatluna', 'server'],
   optional: ['memesluna', 'console'],
 }
-
-
-
-
-

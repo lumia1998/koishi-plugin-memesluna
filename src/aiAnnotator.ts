@@ -6,6 +6,15 @@ import { getMessageContent } from 'koishi-plugin-chatluna/utils/string'
 import { ComputedRef } from 'koishi-plugin-chatluna'
 import { parseRawModelName } from 'koishi-plugin-chatluna/llm-core/utils/count_tokens'
 import { loadOptionalSharp, loadPhoton } from './service'
+import { AIUsageTracker } from './aiUsageTracker'
+import {
+  MAX_ALIASES_COUNT,
+  MAX_TAGS_COUNT,
+  MAX_ANNOTATION_ITEM_LENGTH,
+  AI_IMAGE_COMPRESSION_THRESHOLD,
+  AI_IMAGE_TARGET_SIZE,
+  AI_IMAGE_JPEG_QUALITY,
+} from './constants'
 
 const tryParse = <T>(text: string): T | null => {
     try {
@@ -51,6 +60,28 @@ export interface AnnotateContext {
     filename?: string
     collectionName?: string
     imageUrl?: string
+}
+
+function normalizeAnnotationList(value: unknown, maxItems: number, maxLength: number): string[] {
+    if (!Array.isArray(value)) return []
+
+    const result: string[] = []
+    const seen = new Set<string>()
+
+    for (const item of value) {
+        if (typeof item !== 'string') continue
+        const normalized = item.trim().replace(/\s+/g, ' ')
+        if (!normalized || normalized.length > maxLength) continue
+
+        const key = normalized.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        result.push(normalized)
+
+        if (result.length >= maxItems) break
+    }
+
+    return result
 }
 
 function getImageMimeFromBytes(buffer: Buffer): string {
@@ -100,7 +131,7 @@ function getImageMimeFromBytes(buffer: Buffer): string {
 async function compressImageForAI(buffer: Buffer): Promise<{ buffer: Buffer; mimeType: string }> {
     const originalMime = getImageMimeFromBytes(buffer)
     // If it's already small and not a GIF, do not compress
-    if (buffer.length < 30 * 1024 && originalMime !== 'image/gif') {
+    if (buffer.length < AI_IMAGE_COMPRESSION_THRESHOLD && originalMime !== 'image/gif') {
         return { buffer, mimeType: originalMime }
     }
 
@@ -108,8 +139,8 @@ async function compressImageForAI(buffer: Buffer): Promise<{ buffer: Buffer; mim
     if (sharp) {
         try {
             const compressed = await sharp(buffer)
-                .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
-                .jpeg({ quality: 75 })
+                .resize(AI_IMAGE_TARGET_SIZE, AI_IMAGE_TARGET_SIZE, { fit: 'inside', withoutEnlargement: true })
+                .jpeg({ quality: AI_IMAGE_JPEG_QUALITY })
                 .toBuffer()
             return { buffer: compressed, mimeType: 'image/jpeg' }
         } catch (err) {
@@ -124,15 +155,15 @@ async function compressImageForAI(buffer: Buffer): Promise<{ buffer: Buffer; mim
             img = photon.PhotonImage.new_from_byteslice(new Uint8Array(buffer))
             const w = img.get_width()
             const h = img.get_height()
-            if (w > 512 || h > 512) {
-                const ratio = Math.min(512 / w, 512 / h)
+            if (w > AI_IMAGE_TARGET_SIZE || h > AI_IMAGE_TARGET_SIZE) {
+                const ratio = Math.min(AI_IMAGE_TARGET_SIZE / w, AI_IMAGE_TARGET_SIZE / h)
                 const newW = Math.round(w * ratio)
                 const newH = Math.round(h * ratio)
                 const resized = photon.resize(img, newW, newH, photon.SamplingFilter.Nearest)
                 img.free()
                 img = resized
             }
-            const jpegBytes = img.get_bytes_jpeg(75)
+            const jpegBytes = img.get_bytes_jpeg(AI_IMAGE_JPEG_QUALITY)
             img.free()
             return { buffer: Buffer.from(jpegBytes), mimeType: 'image/jpeg' }
         } catch (err) {
@@ -147,14 +178,36 @@ async function compressImageForAI(buffer: Buffer): Promise<{ buffer: Buffer; mim
 
 export class AIAnnotator {
     private _model: ComputedRef<ChatLunaChatModel> | null = null
+    private usageTracker: AIUsageTracker
 
     constructor(
         private ctx: Context,
         private config: Config
-    ) {}
+    ) {
+        this.usageTracker = new AIUsageTracker(
+            ctx,
+            config.aiDailyLimit,
+            config.aiWarnThreshold
+        )
+    }
 
     get model() {
         return this._model
+    }
+
+    /**
+     * 获取 AI 使用统计
+     */
+    getUsageStats() {
+        return this.usageTracker.getStats()
+    }
+
+    /**
+     * 更新配置
+     */
+    updateConfig(config: Config): void {
+        this.config = config
+        this.usageTracker.updateConfig(config.aiDailyLimit, config.aiWarnThreshold)
     }
 
     async initialize(): Promise<void> {
@@ -181,33 +234,9 @@ export class AIAnnotator {
                 Array.isArray(parsed.aliases) &&
                 Array.isArray(parsed.tags)
             ) {
-                const allCandidates = new Set(
-                    (this.config.synonymGroups || [])
-                        .flatMap(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
-                )
-                const validTags = parsed.tags
-                    .map(t => t.trim())
-                    .filter(t => allCandidates.has(t))
-                
-                if (validTags.length > 0) {
-                    parsed.tags = [validTags[0]]
-                } else {
-                    let found = false
-                    for (const alias of parsed.aliases) {
-                        for (const cand of allCandidates) {
-                            if (alias.includes(cand)) {
-                                parsed.tags = [cand]
-                                found = true
-                                break
-                            }
-                        }
-                        if (found) break
-                    }
-                    if (!found) {
-                        parsed.tags = []
-                    }
-                }
-                return parsed
+                const aliases = normalizeAnnotationList(parsed.aliases, MAX_ALIASES_COUNT, MAX_ANNOTATION_ITEM_LENGTH)
+                const tags = normalizeAnnotationList(parsed.tags, MAX_TAGS_COUNT, MAX_ANNOTATION_ITEM_LENGTH)
+                return { aliases, tags }
             }
         }
         this.ctx.logger.error(`AI标注结果解析失败: ${text}`)
@@ -218,11 +247,15 @@ export class AIAnnotator {
         if (!this._model?.value) return null
         if (buffer.length === 0) return null
 
+        // 检查 AI 使用配额
+        const usageCheck = this.usageTracker.canUseAI()
+        if (!usageCheck.allowed) {
+            this.ctx.logger.warn(`AI 标注被拒绝: ${usageCheck.reason}`)
+            return null
+        }
+
         // 替换 prompt 模板中的上下文变量
         let prompt = this.config.annotatePrompt
-        const allCandidates = (this.config.synonymGroups || [])
-            .flatMap(group => group.split(/[,，]/).map(item => item.trim()).filter(Boolean))
-        prompt = prompt.replaceAll('{{allowed_tags}}', allCandidates.join('、'))
 
         if (context) {
             prompt = prompt
@@ -266,7 +299,11 @@ export class AIAnnotator {
                 const parsed = this.parseResult(
                     getMessageContent(result.content)
                 )
-                if (parsed) return parsed
+                if (parsed) {
+                    // 成功标注，记录使用次数
+                    this.usageTracker.recordUsage()
+                    return parsed
+                }
             } catch (error) {
                 this.ctx.logger.warn(
                     `AI标注失败 (attempt ${attempt + 1}/${this.config.aiMaxAttempts}):`,

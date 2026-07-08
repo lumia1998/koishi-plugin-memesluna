@@ -4,14 +4,48 @@ import path from 'path'
 import { Context, Service, Eval } from 'koishi'
 import type { Config } from './config'
 import type { AIAnnotator } from './aiAnnotator'
+import {
+  DHASH_BITS,
+  DHASH_WIDTH,
+  DHASH_HEIGHT,
+} from './constants'
 
 export const MEMESLUNA_IMAGES_UPDATED = 'memesluna/images-updated'
 
 export function sanitizeFilename(filename: string): string {
+  // 先提取扩展名
   const ext = path.extname(filename).toLowerCase()
-  const base = path.basename(filename, ext)
-  const safeBase = base.replace(/[\s/\\?%*:|"<>,;=@]/g, '_')
-  return `${safeBase}${ext}`
+
+  // 移除扩展名后的部分
+  let base = ext ? filename.slice(0, filename.length - ext.length) : filename
+
+  // 过滤危险字符（将路径分隔符也替换）
+  base = base.replace(/[\s/\\?%*:|"<>,;=@]+/g, '_')
+
+  // 移除前导/尾随点和下划线
+  base = base.replace(/^[._]+|[._]+$/g, '')
+
+  // 如果清理后为空，使用随机名
+  if (!base) {
+    base = `file_${Date.now()}`
+  }
+
+  // Windows 保留名检查
+  const reserved = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i
+  if (reserved.test(base)) {
+    base = `_${base}`
+  }
+
+  // 限制长度（255字节 - 扩展名 - 余量）
+  const maxLen = 200 - ext.length
+  if (Buffer.byteLength(base, 'utf8') > maxLen) {
+    // 截断到安全长度
+    while (Buffer.byteLength(base, 'utf8') > maxLen && base.length > 1) {
+      base = base.slice(0, -1)
+    }
+  }
+
+  return `${base}${ext}`
 }
 
 const IMAGE_EXTENSIONS = new Set([
@@ -58,7 +92,7 @@ export function loadPhoton(): any | null {
 }
 
 function countHexBitDistance(a: string, b: string): number {
-  if (!a || !b || a.length !== b.length) return 64
+  if (!a || !b || a.length !== b.length) return DHASH_BITS
   let distance = 0
   for (let i = 0; i < a.length; i++) {
     const diff = Number.parseInt(a[i], 16) ^ Number.parseInt(b[i], 16)
@@ -66,10 +100,6 @@ function countHexBitDistance(a: string, b: string): number {
   }
   return distance
 }
-
-const DHASH_BITS = 64
-const DHASH_WIDTH = 9
-const DHASH_HEIGHT = 8
 
 function lumaFromRgba(data: Buffer | Uint8Array, offset: number): number {
   const alpha = data[offset + 3] / 255
@@ -340,7 +370,7 @@ export class MemesLunaService extends Service {
       {
         primary: 'id',
         unique: [['collection', 'index']],
-        indexes: ['hash'],
+        indexes: ['hash', 'collection', 'perceptual_hash'],
       }
     )
 
@@ -855,6 +885,9 @@ export class MemesLunaService extends Service {
 
   async createCollection(collectionName: string): Promise<boolean> {
     this.ensureCollectionName(collectionName)
+    if (await this.getEndpointByName(collectionName)) {
+      throw new Error(`Collection name conflicts with existing endpoint: ${collectionName}`)
+    }
     const dir = this.getCollectionDir(collectionName)
     try {
       await fs.mkdir(dir)
@@ -1361,12 +1394,23 @@ export class MemesLunaService extends Service {
     const staged = await this.getStagedImageBuffer(id)
     if (!staged) return null
 
-    const originalName = this.isImageFile(row.original_name) ? row.original_name : row.filename
-    const savedResult = await this.addLocalImageBuffer(collectionName, staged.buffer, originalName)
-    const saved = savedResult.filename
-    await this.deleteStagedImage(id)
+    // P1 修复：添加事务性保护，防止归档过程中的数据不一致
+    let savedResult: any
+    try {
+      const originalName = this.isImageFile(row.original_name) ? row.original_name : row.filename
+      savedResult = await this.addLocalImageBuffer(collectionName, staged.buffer, originalName)
 
-    if (this._annotator && this.config.autoAnnotate) {
+      // 只有在成功写入正式合集后才删除暂缓区图片
+      await this.deleteStagedImage(id)
+    } catch (error) {
+      // 如果归档失败，暂缓区图片保持不变
+      this.ctx.logger('memesluna').error(`Failed to promote staged image ${id}:`, error)
+      throw error
+    }
+
+    const saved = savedResult.filename
+
+    if (this._annotator) {
       void this.queueAnnotation([{
         id: savedResult.id,
         collection: collectionName,
@@ -1577,6 +1621,12 @@ export class MemesLunaService extends Service {
     if (!input.url) {
       throw new Error('Endpoint URL is required.')
     }
+    if (await this.getEndpointByName(input.name)) {
+      throw new Error(`Endpoint already exists: ${input.name}`)
+    }
+    if (await this.collectionExists(input.name)) {
+      throw new Error(`Endpoint name conflicts with existing collection: ${input.name}`)
+    }
 
     const id = randomUUID()
     const now = new Date()
@@ -1629,7 +1679,7 @@ export class MemesLunaService extends Service {
     return true
   }
 
-  async buildRouteInventory(backendPath: string, synonymGroups?: string[][]): Promise<string> {
+  async buildRouteInventory(backendPath: string): Promise<string> {
     const endpoints = await this.getEndpoints()
     const collections = await this.getCollections()
 
@@ -1639,7 +1689,7 @@ export class MemesLunaService extends Service {
     if (endpoints.length > 0) {
       const endpointLines = endpoints.map(ep => {
         const desc = ep.description || ep.name
-        return `  - ${ep.name}：${desc} → ${backendPath}/${ep.name}`
+        return `  - ${ep.name}：${desc} → ${backendPath}/${encodeURIComponent(ep.name)}`
       })
       sections.push(`【端点转发】\n${endpointLines.join('\n')}`)
     }
@@ -1650,21 +1700,11 @@ export class MemesLunaService extends Service {
       const info = await this.getCollectionInfo(collection)
       if (info?.hasContent) {
         const desc = info.description ? `（${info.description}）` : ''
-        collectionLines.push(`  - ${collection}${desc} → ${backendPath}/${collection}`)
+        collectionLines.push(`  - ${collection}${desc} → ${backendPath}/${encodeURIComponent(collection)}`)
       }
     }
     if (collectionLines.length > 0) {
       sections.push(`【表情包合集】\n${collectionLines.join('\n')}`)
-    }
-
-    // 标签分节（展示所有同义词组的完整词列表）
-    if (synonymGroups && synonymGroups.length > 0) {
-      const groupLines = synonymGroups
-        .filter(g => g.length > 0)
-        .map(g => `  ${g.join(' / ')}`)
-      if (groupLines.length > 0) {
-        sections.push(`【情绪/标签】（每行为同一组，组内任意词均可作为路由）\n${groupLines.join('\n')}\n  标签路由格式：${backendPath}/标签名`)
-      }
     }
 
     return sections.join('\n\n')
@@ -1721,9 +1761,3 @@ declare module 'koishi' {
     }
   }
 }
-
-
-
-
-
-
