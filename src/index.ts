@@ -6,7 +6,16 @@ import type {} from 'koishi-plugin-chatluna'
 
 import { Context, h } from 'koishi'
 import { Config } from './config'
-import { MEMESLUNA_IMAGES_UPDATED, MemesLunaService, hashImageBuffer, isReservedPath } from './service'
+import {
+  MEMESLUNA_IMAGES_UPDATED,
+  MemesLunaService,
+  filterCollectionsByAccess,
+  hashImageBuffer,
+  isReservedPath,
+  isCollectionAccessAllowed,
+  toCollectionAccessSession,
+  type CollectionAccess,
+} from './service'
 import { AIAnnotator } from './aiAnnotator'
 import {
   ALL_IMAGES_CACHE_TTL,
@@ -581,7 +590,19 @@ function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
     })
   )
 
+  consoleService.addListener(
+    'memesluna/getCollectionAccess',
+    withReady(async (name: string) => {
+      return await service.getCollectionAccess(name)
+    })
+  )
 
+  consoleService.addListener(
+    'memesluna/setCollectionAccess',
+    withReady(async (name: string, access: CollectionAccess) => {
+      return await service.setCollectionAccess(name, access)
+    })
+  )
 
   consoleService.addListener(
     'memesluna/deleteLocalImage',
@@ -1349,22 +1370,22 @@ export function apply(ctx: Context, config: Config) {
 
   root
     .subcommand('.list', '查看当前可用表情路由')
-    .action(async () => {
+    .action(async ({ session }) => {
       const service = ctx.memesluna
       await service.ready
 
+      const accessSession = toCollectionAccessSession(session)
       const [collectionNames, endpoints] = await Promise.all([
         service.getCollections(),
         service.getEndpoints(),
       ])
 
-      const lines: string[] = []
+      const collectionInfos = (
+        await Promise.all(collectionNames.map((collectionName) => service.getCollectionInfo(collectionName)))
+      ).filter((info): info is NonNullable<typeof info> => !!info?.hasContent)
 
-      for (const collectionName of collectionNames) {
-        const info = await service.getCollectionInfo(collectionName)
-        if (!info?.hasContent) continue
-        lines.push(`${collectionName} ${collectionName}表情包`)
-      }
+      const lines: string[] = filterCollectionsByAccess(collectionInfos, accessSession)
+        .map((info) => `${info.name} ${info.name}表情包`)
 
       for (const endpoint of endpoints) {
         const endpointLabel = endpoint.description || `${endpoint.name}端点`
@@ -1393,6 +1414,13 @@ export function apply(ctx: Context, config: Config) {
       }
     } catch (err) {
       return `检查表情包失败: ${(err as Error).message}`
+    }
+
+    // 权限检查必须在下载/写文件之前
+    const access = await service.getCollectionAccess(name)
+    const accessSession = toCollectionAccessSession(session)
+    if (!isCollectionAccessAllowed(access, accessSession)) {
+      return `当前会话无权向表情包合集「${name}」写入图片（访问限制：${access.mode === 'whitelist' ? '白名单' : '黑名单'}）。`
     }
 
     let imageUrls: string[] = []

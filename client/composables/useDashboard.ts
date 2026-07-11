@@ -1,12 +1,35 @@
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { sendMemesLuna } from './rpc'
 import type {
+  ConsoleCollectionAccess,
+  ConsoleCollectionAccessMode,
   ConsoleCollectionInfo as CollectionInfo,
   ConsoleEndpointInfo as EndpointInfo,
   ConsoleEndpointInput,
   ConsoleSimilarStagedImageGroup as SimilarStagedImageGroup,
   ConsoleStagedImageInfo as StagedImageInfo,
 } from '../../src/console-rpc'
+
+const DEFAULT_COLLECTION_ACCESS: ConsoleCollectionAccess = { mode: 'disabled', groups: [] }
+
+function normalizeCollectionAccess(value: unknown): ConsoleCollectionAccess {
+  if (!value || typeof value !== 'object') return { ...DEFAULT_COLLECTION_ACCESS }
+  const input = value as { mode?: unknown; groups?: unknown }
+  if (input.mode !== 'disabled' && input.mode !== 'whitelist' && input.mode !== 'blacklist') {
+    return { ...DEFAULT_COLLECTION_ACCESS }
+  }
+  const groups = Array.isArray(input.groups)
+    ? Array.from(new Set(input.groups.filter((group): group is string => typeof group === 'string').map((group) => group.trim()).filter(Boolean)))
+    : []
+  return { mode: input.mode, groups }
+}
+
+function withCollectionAccess(item: CollectionInfo): CollectionInfo {
+  return {
+    ...item,
+    access: normalizeCollectionAccess(item.access),
+  }
+}
 
 interface SimilarStagedImageGroupView extends SimilarStagedImageGroup {
   label: string
@@ -81,6 +104,11 @@ export function useDashboard() {
   const collectionFilter = ref<'all' | 'local' | 'external'>('all')
   const activeCollectionMenu = ref<string | null>(null)
   const newDescription = ref('')
+  const accessForm = reactive({
+    mode: 'disabled' as ConsoleCollectionAccessMode,
+    groupsText: '',
+  })
+  const accessSaving = ref(false)
   const externalLinksText = ref('')
   const detailResources = reactive({
     images: [] as string[],
@@ -226,12 +254,24 @@ export function useDashboard() {
     }
   }
 
-  const TAG_PALETTE = ['#f97316','#ec4899','#8b5cf6','#06b6d4','#22c55e','#eab308','#f43f5e','#14b8a6','#a855f7','#3b82f6']
+  const TAG_PALETTE_LIGHT = ['#f97316','#ec4899','#8b5cf6','#06b6d4','#22c55e','#eab308','#f43f5e','#14b8a6','#a855f7','#3b82f6']
+  // Brighter palette for dark backgrounds to keep badge text readable
+  const TAG_PALETTE_DARK = ['#fb923c','#f472b6','#a78bfa','#22d3ee','#4ade80','#facc15','#fb7185','#2dd4bf','#c084fc','#60a5fa']
+
+  function isDarkThemeActive(): boolean {
+    if (typeof document === 'undefined') return false
+    const root = document.documentElement
+    const body = document.body
+    if (root.classList.contains('dark') || body.classList.contains('dark')) return true
+    if (root.getAttribute('data-theme') === 'dark') return true
+    return !!document.querySelector('.theme-root.dark')
+  }
 
   function tagColor(tag: string): string {
+    const palette = isDarkThemeActive() ? TAG_PALETTE_DARK : TAG_PALETTE_LIGHT
     let hash = 0
     for (let i = 0; i < tag.length; i++) hash = ((hash << 5) - hash) + tag.charCodeAt(i)
-    return TAG_PALETTE[Math.abs(hash) % TAG_PALETTE.length]
+    return palette[Math.abs(hash) % palette.length]
   }
 
   async function openTagEditor(collection: string, filename: string) {
@@ -451,6 +491,12 @@ export function useDashboard() {
   })
   const currentCollectionTotalCount = computed(() => {
     return currentCollection.value?.totalCount || detailResources.images.length + detailResources.links.length
+  })
+  const currentCollectionAccessLabel = computed(() => {
+    const mode = currentCollection.value?.access?.mode || accessForm.mode
+    if (mode === 'whitelist') return '白名单'
+    if (mode === 'blacklist') return '黑名单'
+    return '不限制'
   })
   const endpointPreviewUrl = computed(() => {
     const name = endpointForm.name.trim()
@@ -765,6 +811,66 @@ export function useDashboard() {
       })
   }
 
+  function syncAccessForm(access?: ConsoleCollectionAccess | null) {
+    const normalized = normalizeCollectionAccess(access)
+    accessForm.mode = normalized.mode
+    accessForm.groupsText = normalized.groups.join('\n')
+  }
+
+  function parseAccessGroupsText(text: string): string[] {
+    return Array.from(new Set(
+      text
+        .split(/\r?\n/g)
+        .map((line) => line.trim())
+        .filter(Boolean),
+    ))
+  }
+
+  async function loadCollectionAccess(name: string) {
+    try {
+      const access = await sendMemesLuna('memesluna/getCollectionAccess', name)
+      syncAccessForm(access)
+      if (currentCollection.value?.name === name) {
+        currentCollection.value = {
+          ...currentCollection.value,
+          access: normalizeCollectionAccess(access),
+        }
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '加载访问策略失败', 'error')
+    }
+  }
+
+  async function saveCollectionAccess() {
+    if (!currentCollection.value) return
+    const access: ConsoleCollectionAccess = {
+      mode: accessForm.mode,
+      groups: parseAccessGroupsText(accessForm.groupsText),
+    }
+
+    try {
+      accessSaving.value = true
+      const ok = await sendMemesLuna('memesluna/setCollectionAccess', currentCollection.value.name, access)
+      if (!ok) {
+        showToast('保存访问策略失败：合集不存在', 'error')
+        return
+      }
+      showToast('访问策略已保存', 'success')
+      await fetchState()
+      const match = collections.value.find((c) => c.name === currentCollection.value?.name)
+      if (match) {
+        currentCollection.value = match
+        syncAccessForm(match.access)
+      } else {
+        syncAccessForm(access)
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '保存访问策略失败', 'error')
+    } finally {
+      accessSaving.value = false
+    }
+  }
+
   // Fetch variables from Koishi app
   async function fetchState() {
     try {
@@ -776,8 +882,14 @@ export function useDashboard() {
       if (state) {
         if (state.backendPath) backendPath.value = state.backendPath
         endpoints.value = Array.isArray(state.endpoints) ? state.endpoints : []
-        collections.value = Array.isArray(state.collections) ? state.collections : []
+        collections.value = Array.isArray(state.collections)
+          ? state.collections.map((item) => withCollectionAccess(item))
+          : []
         stagedImages.value = Array.isArray(state.stagedImages) ? state.stagedImages : []
+        if (currentCollection.value) {
+          const match = collections.value.find((c) => c.name === currentCollection.value?.name)
+          if (match) currentCollection.value = match
+        }
         warmCollectionPreviews()
       }
     } catch (err) {
@@ -1045,9 +1157,11 @@ export function useDashboard() {
 
   async function enterCollectionDetail(item: CollectionInfo) {
     activeCollectionMenu.value = null
-    currentCollection.value = item
+    const normalized = withCollectionAccess(item)
+    currentCollection.value = normalized
     sessionStorage.setItem('memesluna_active_collection', item.name)
     newDescription.value = item.description || ''
+    syncAccessForm(normalized.access)
     externalLinksText.value = ''
     gallerySearch.value = ''
     gallerySort.value = 'name'
@@ -1056,7 +1170,10 @@ export function useDashboard() {
     apiPreviewUrl.value = ''
     currentPage.value = 1
     clearSelectedImages()
-    await loadCollectionResources(item.name)
+    await Promise.all([
+      loadCollectionResources(item.name),
+      loadCollectionAccess(item.name),
+    ])
     // Load tags for all images in this collection
     const allFns = [...detailResources.images]
     if (allFns.length) {
@@ -1070,6 +1187,7 @@ export function useDashboard() {
     if (apiPreviewUrl.value) URL.revokeObjectURL(apiPreviewUrl.value)
     apiPreviewUrl.value = ''
     clearSelectedImages()
+    syncAccessForm(DEFAULT_COLLECTION_ACCESS)
   }
 
   async function loadCollectionResources(name: string) {
@@ -1093,7 +1211,10 @@ export function useDashboard() {
     await loadCollectionResources(currentCollection.value.name)
     await fetchState()
     const match = collections.value.find(c => c.name === currentCollection.value.name)
-    if (match) currentCollection.value = match
+    if (match) {
+      currentCollection.value = match
+      syncAccessForm(match.access)
+    }
     loading.value = false
     showToast('本地及缓存资源数据已刷新成功', 'success')
   }
@@ -1477,6 +1598,8 @@ export function useDashboard() {
     collectionFilter,
     activeCollectionMenu,
     newDescription,
+    accessForm,
+    accessSaving,
     externalLinksText,
     detailResources,
     collectionPreviews,
@@ -1519,7 +1642,9 @@ export function useDashboard() {
     getVisibleImageTags,
     getHiddenImageTagsCount,
     loadImageTagsBatch,
-    TAG_PALETTE,
+    TAG_PALETTE: TAG_PALETTE_LIGHT,
+    TAG_PALETTE_LIGHT,
+    TAG_PALETTE_DARK,
     tagColor,
     openTagEditor,
     addTagFromEditor,
@@ -1550,6 +1675,7 @@ export function useDashboard() {
     currentCollectionCoverUrl,
     currentCollectionApiUrl,
     currentCollectionTotalCount,
+    currentCollectionAccessLabel,
     endpointPreviewUrl,
     previewRouteRows,
     filteredCollections,
@@ -1612,6 +1738,9 @@ export function useDashboard() {
     refreshCollectionResources,
     testCurrentCollectionApi,
     saveCollectionDescription,
+    loadCollectionAccess,
+    saveCollectionAccess,
+    syncAccessForm,
     triggerFileInput,
     onFileSelected,
     onDrop,
