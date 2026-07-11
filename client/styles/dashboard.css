@@ -1727,22 +1727,31 @@ body.dark .memesluna-app-layout {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+.staging-header-actions .asset-btn.is-active {
+  border-color: var(--memesluna-primary);
+  background-color: var(--memesluna-primary-soft-bg);
+  color: var(--memesluna-primary);
+}
+.staging-header-actions .asset-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .similar-staging-view {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 .similar-message {
-  color: var(--k-text-muted, rgba(55, 53, 47, 0.58));
+  color: var(--memesluna-text-muted);
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 500;
 }
 .similar-group {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding-top: 12px;
-  border-top: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
+  border-top: 1px solid var(--memesluna-border);
 }
 .similar-group:first-of-type {
   padding-top: 0;
@@ -1756,13 +1765,13 @@ body.dark .memesluna-app-layout {
 }
 .similar-group-header h3 {
   margin: 0;
-  color: var(--k-text-normal, #111827);
-  font-size: 0.96rem;
-  font-weight: 750;
+  color: var(--memesluna-text);
+  font-size: 0.92rem;
+  font-weight: 600;
 }
 .similar-group-header p {
   margin: 4px 0 0;
-  color: var(--k-text-muted, rgba(55, 53, 47, 0.58));
+  color: var(--memesluna-text-muted);
   font-size: 0.74rem;
 }
 .staging-toolbar {
@@ -1771,8 +1780,8 @@ body.dark .memesluna-app-layout {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 0;
-  border-top: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.06));
-  border-bottom: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.06));
+  border-top: 1px solid var(--memesluna-border);
+  border-bottom: 1px solid var(--memesluna-border);
 }
 .staging-search-box {
   max-width: 420px;
@@ -1783,10 +1792,10 @@ body.dark .memesluna-app-layout {
   align-items: center;
   padding: 0 10px;
   border-radius: 999px;
-  background-color: var(--k-bg-panel, rgba(15, 23, 42, 0.05));
-  color: var(--k-text-muted, rgba(55, 53, 47, 0.58));
+  background-color: var(--memesluna-bg-panel);
+  color: var(--memesluna-text-muted);
   font-size: 0.76rem;
-  font-weight: 650;
+  font-weight: 500;
   white-space: nowrap;
 }
 .staging-empty-card {
@@ -1801,13 +1810,14 @@ body.dark .memesluna-app-layout {
   position: relative;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.09));
+  border: 1px solid var(--memesluna-border);
   border-radius: 8px;
-  background-color: var(--k-bg-card, #ffffff);
+  background-color: var(--memesluna-bg-card);
   box-shadow: none;
+  transition: border-color 0.12s ease;
 }
 .staging-card-selected {
-  border-color: var(--k-color-primary, #2383e2);
+  border-color: var(--memesluna-primary);
   box-shadow: 0 0 0 2px var(--memesluna-focus-ring);
 }
 .staging-select-toggle {
@@ -1817,19 +1827,30 @@ body.dark .memesluna-app-layout {
   z-index: 5;
   width: 24px;
   height: 24px;
-  border-radius: 6px;
-  border: 2px solid rgba(255, 255, 255, 0.8);
-  background-color: rgba(255, 255, 255, 0.85);
-  color: var(--k-color-primary, #2383e2);
+  border-radius: 999px;
+  border: 1px solid var(--memesluna-border-strong);
+  background-color: var(--memesluna-floating-action-bg);
+  color: var(--memesluna-primary);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   padding: 0;
-  transition: background-color 0.15s ease;
+  box-shadow: none;
+  opacity: 0.92;
+  transition: background-color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+.staging-card:hover .staging-select-toggle,
+.staging-card-selected .staging-select-toggle {
+  opacity: 1;
 }
 .staging-select-toggle:hover {
-  background-color: rgba(255, 255, 255, 0.95);
+  background-color: var(--memesluna-bg-panel);
+  border-color: var(--memesluna-primary);
+}
+.staging-card-selected .staging-select-toggle {
+  border-color: var(--memesluna-primary);
+  background-color: var(--memesluna-primary-soft-bg);
 }
 .staging-select-toggle svg {
   width: 14px;
@@ -1842,9 +1863,9 @@ body.dark .memesluna-app-layout {
   gap: 12px;
   padding: 10px 14px;
   margin-bottom: 14px;
-  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.09));
+  border: 1px solid var(--memesluna-border);
   border-radius: 8px;
-  background-color: var(--memesluna-floating-action-bg, rgba(255, 255, 255, 0.92));
+  background-color: var(--memesluna-floating-action-bg);
 }
 .staging-image-shell {
   width: 100%;
@@ -1854,8 +1875,8 @@ body.dark .memesluna-app-layout {
   justify-content: center;
   padding: 0;
   border: none;
-  border-bottom: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
-  background-color: var(--memesluna-image-preview-bg, #ffffff);
+  border-bottom: 1px solid var(--memesluna-border);
+  background-color: var(--memesluna-image-preview-bg);
   cursor: pointer;
 }
 .staging-image {
@@ -1865,10 +1886,10 @@ body.dark .memesluna-app-layout {
   display: block;
 }
 .staging-card-body {
-  padding: 12px;
+  padding: 10px 12px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 .staging-title-row {
   display: flex;
@@ -1882,29 +1903,30 @@ body.dark .memesluna-app-layout {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--k-text-normal, #111827);
-  font-size: 0.86rem;
-  font-weight: 700;
+  color: var(--memesluna-text);
+  font-size: 0.82rem;
+  font-weight: 550;
 }
 .staging-ext-tag {
   flex: 0 0 auto;
   padding: 1px 5px;
   border-radius: 4px;
-  background-color: var(--k-bg-panel, #f1f5f9);
-  color: var(--k-text-muted, #64748b);
-  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
-  font-size: 0.65rem;
-  font-weight: 600;
+  background-color: var(--memesluna-bg-panel);
+  color: var(--memesluna-text-muted);
+  border: 1px solid var(--memesluna-border);
+  font-size: 0.64rem;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
 .staging-meta-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px 10px;
-  color: var(--k-text-muted, rgba(55, 53, 47, 0.58));
-  font-size: 0.72rem;
+  gap: 4px 10px;
+  color: var(--memesluna-text-muted);
+  font-size: 0.7rem;
   line-height: 1.35;
+  font-weight: 400;
 }
 .staging-meta-grid span {
   min-width: 0;
@@ -1914,17 +1936,60 @@ body.dark .memesluna-app-layout {
 }
 .staging-select {
   width: 100%;
-  height: 34px;
+  height: 32px;
+  font-size: 0.78rem;
 }
 .staging-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--memesluna-border);
 }
 .staging-action-btn {
   min-width: 0;
-  width: 100%;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--memesluna-text-muted);
+  font-size: 0.76rem;
+  font-weight: 500;
+  font-family: inherit;
+  line-height: 1;
   white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.staging-action-btn:hover:not(:disabled) {
+  background-color: var(--memesluna-bg-hover);
+  color: var(--memesluna-text);
+}
+.staging-action-btn.secondary {
+  border-color: var(--memesluna-border);
+  background-color: var(--memesluna-bg-card);
+  color: var(--memesluna-text);
+}
+.staging-action-btn.secondary:hover:not(:disabled) {
+  background-color: var(--memesluna-bg-panel);
+  border-color: var(--memesluna-border-strong);
+}
+.staging-action-btn.danger {
+  color: var(--memesluna-danger);
+  border-color: transparent;
+  background: transparent;
+}
+.staging-action-btn.danger:hover:not(:disabled) {
+  background-color: var(--memesluna-danger-soft-bg);
+  border-color: var(--memesluna-danger-border);
+  color: var(--memesluna-danger);
+}
+.staging-action-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
 }
 /* VIEW 2: DISTRIBUTION / ENDPOINT GRID */
 .page-section-header {
@@ -2819,6 +2884,9 @@ body.dark .memesluna-app-layout {
     grid-template-columns: 1fr;
   }
   .staging-actions {
-    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+  .staging-action-btn.secondary {
+    flex: 1;
   }
 }

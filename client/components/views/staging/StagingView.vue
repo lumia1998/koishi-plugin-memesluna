@@ -8,18 +8,18 @@
             <div class="staging-header-actions">
               <button
                 @click="toggleSimilarStagingMode"
-                :class="['btn', stagingViewMode === 'similar' ? 'btn-primary' : 'btn-secondary', 'btn-notion']"
+                :class="['asset-btn', 'secondary', { 'is-active': stagingViewMode === 'similar' }]"
                 :disabled="similarLoading || stagedImages.length < 2"
               >
                 {{ similarLoading ? '筛选中...' : (stagingViewMode === 'similar' ? '显示全部' : '筛选相似图片') }}
               </button>
-              <button @click="refreshStagedImages" class="btn btn-secondary btn-notion">
+              <button @click="refreshStagedImages" class="asset-btn secondary">
                 刷新列表
               </button>
               <button
                 v-if="stagedImages.length"
                 @click="confirmDeleteAllStagedImages"
-                class="btn btn-danger btn-notion"
+                class="asset-btn danger"
               >
                 一键清空
               </button>
@@ -94,14 +94,14 @@
                     <div class="staging-actions">
                       <button
                         @click="promoteStagedImage(item)"
-                        class="btn btn-primary staging-action-btn"
+                        class="staging-action-btn secondary"
                         :disabled="stagingBusyId === item.id || !stagingTargetCollection[item.id]"
                       >
-                        {{ stagingBusyId === item.id ? '处理中...' : '归档到表情包' }}
+                        {{ stagingBusyId === item.id ? '处理中...' : '归档' }}
                       </button>
                       <button
                         @click="deleteStagedImage(item)"
-                        class="btn btn-danger staging-action-btn"
+                        class="staging-action-btn danger"
                         :disabled="stagingBusyId === item.id"
                       >
                         删除
@@ -181,14 +181,14 @@
                   <div class="staging-actions">
                     <button
                       @click="promoteStagedImage(item)"
-                      class="btn btn-primary staging-action-btn"
+                      class="staging-action-btn secondary"
                       :disabled="stagingBusyId === item.id || !stagingTargetCollection[item.id]"
                     >
-                      {{ stagingBusyId === item.id ? '处理中...' : '归档到表情包' }}
+                      {{ stagingBusyId === item.id ? '处理中...' : '归档' }}
                     </button>
                     <button
                       @click="deleteStagedImage(item)"
-                      class="btn btn-danger staging-action-btn"
+                      class="staging-action-btn danger"
                       :disabled="stagingBusyId === item.id"
                     >
                       删除

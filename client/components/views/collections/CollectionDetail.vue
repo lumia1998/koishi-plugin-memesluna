@@ -132,7 +132,7 @@
                     class="asset-link-textarea asset-access-groups"
                     rows="4"
                     :disabled="accessForm.mode === 'disabled'"
-                    placeholder="每行一个群号，支持裸 ID 或 platform:id&#10;例如：&#10;123456789&#10;qq:987654321"
+                    placeholder="每行一个群号&#10;例如：&#10;123456789&#10;987654321"
                   ></textarea>
                   <div class="asset-access-actions">
                     <div class="asset-api-hint">

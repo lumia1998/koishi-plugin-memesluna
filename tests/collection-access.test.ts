@@ -39,16 +39,18 @@ describe('合集访问策略', () => {
     expect(normalizeCollectionAccess({ mode: 'unknown', groups: ['a'] })).toEqual({ mode: 'disabled', groups: [] })
   })
 
-  it('生成兼容平台前缀的会话候选', () => {
+  it('仅生成裸群号会话候选（不含 platform 前缀）', () => {
     expect(getSessionAccessCandidates({ platform: 'discord', guildId: 'g1', channelId: 'c1' }))
-      .toEqual(['g1', 'c1', 'discord:g1', 'discord:c1'])
+      .toEqual(['g1', 'c1'])
+    expect(getSessionAccessCandidates({ platform: 'qq', guildId: '123456' }))
+      .toEqual(['123456'])
   })
 
   it('私聊默认允许，并正确应用白名单与黑名单', () => {
     expect(isCollectionAccessAllowed({ mode: 'whitelist', groups: ['g1'] }, {})).toBe(true)
     expect(isCollectionAccessAllowed({ mode: 'whitelist', groups: ['g1'] }, { guildId: 'g1' })).toBe(true)
     expect(isCollectionAccessAllowed({ mode: 'whitelist', groups: ['g1'] }, { guildId: 'g2' })).toBe(false)
-    expect(isCollectionAccessAllowed({ mode: 'blacklist', groups: ['qq:g1'] }, { platform: 'qq', guildId: 'g1' })).toBe(false)
+    expect(isCollectionAccessAllowed({ mode: 'blacklist', groups: ['g1'] }, { guildId: 'g1' })).toBe(false)
     expect(isCollectionAccessAllowed({ mode: 'blacklist', groups: ['g1'] }, { guildId: 'g2' })).toBe(true)
   })
 

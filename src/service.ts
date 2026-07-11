@@ -224,9 +224,12 @@ export function normalizeCollectionAccess(value: unknown): CollectionAccess {
 }
 
 export function getSessionAccessCandidates(session: CollectionAccessSession): string[] {
-  const plain = [session.guildId, session.channelId].filter((value): value is string => !!value)
-  const prefixed = session.platform ? plain.map((value) => `${session.platform}:${value}`) : []
-  return Array.from(new Set([...plain, ...prefixed]))
+  // 仅匹配裸群号（guildId / channelId），不使用 platform: 前缀
+  return Array.from(new Set(
+    [session.guildId, session.channelId]
+      .filter((value): value is string => typeof value === 'string' && !!value.trim())
+      .map((value) => value.trim()),
+  ))
 }
 
 export function isCollectionAccessAllowed(access: CollectionAccess, session: CollectionAccessSession): boolean {
