@@ -180,6 +180,7 @@ export interface CollectionInfo {
   createdAt?: Date
   updatedAt?: Date
   cover?: string
+  access: CollectionAccess
 }
 
 export interface CollectionResource {
@@ -187,6 +188,87 @@ export interface CollectionResource {
   filename?: string
   value: string
   public_url?: string
+}
+
+export type CollectionAccessMode = 'disabled' | 'whitelist' | 'blacklist'
+
+export interface CollectionAccess {
+  mode: CollectionAccessMode
+  groups: string[]
+}
+
+export interface CollectionAccessSession {
+  platform?: string
+  guildId?: string
+  channelId?: string
+  /** 私聊会话：为 true 时始终允许，即便带有 channelId（部分适配器私聊也有 channelId） */
+  isDirect?: boolean
+}
+
+const DEFAULT_COLLECTION_ACCESS: CollectionAccess = { mode: 'disabled', groups: [] }
+
+export function isCollectionAccessMode(value: unknown): value is CollectionAccessMode {
+  return value === 'disabled' || value === 'whitelist' || value === 'blacklist'
+}
+
+export function normalizeCollectionAccess(value: unknown): CollectionAccess {
+  if (!value || typeof value !== 'object') return { ...DEFAULT_COLLECTION_ACCESS }
+  const input = value as { mode?: unknown; groups?: unknown }
+  if (!isCollectionAccessMode(input.mode)) {
+    return { ...DEFAULT_COLLECTION_ACCESS }
+  }
+  const groups = Array.isArray(input.groups)
+    ? Array.from(new Set(input.groups.filter((group): group is string => typeof group === 'string').map((group) => group.trim()).filter(Boolean)))
+    : []
+  return { mode: input.mode, groups }
+}
+
+export function getSessionAccessCandidates(session: CollectionAccessSession): string[] {
+  const plain = [session.guildId, session.channelId].filter((value): value is string => !!value)
+  const prefixed = session.platform ? plain.map((value) => `${session.platform}:${value}`) : []
+  return Array.from(new Set([...plain, ...prefixed]))
+}
+
+export function isCollectionAccessAllowed(access: CollectionAccess, session: CollectionAccessSession): boolean {
+  const normalized = normalizeCollectionAccess(access)
+  if (normalized.mode === 'disabled') return true
+  // 不能用“缺少 guildId”判断私聊：部分群适配器只有 channelId
+  if (session.isDirect === true) return true
+  const candidates = getSessionAccessCandidates(session)
+  if (!candidates.length) return true
+  const matched = candidates.some((candidate) => normalized.groups.includes(candidate))
+  return normalized.mode === 'whitelist' ? matched : !matched
+}
+
+/** 从 Koishi session 组装访问判定上下文（可测） */
+export function toCollectionAccessSession(session: {
+  platform?: string
+  guildId?: string
+  channelId?: string
+  isDirect?: boolean
+  subtype?: string
+} | null | undefined): CollectionAccessSession {
+  if (!session) return {}
+  const isDirect = session.isDirect === true
+    || session.subtype === 'private'
+    || (!session.guildId && !session.channelId)
+  return {
+    platform: session.platform,
+    guildId: session.guildId,
+    channelId: session.channelId,
+    isDirect: isDirect || undefined,
+  }
+}
+
+/** 按会话过滤合集列表（可测）；私聊与 disabled 策略均保留 */
+export function filterCollectionsByAccess<T extends { access?: CollectionAccess }>(
+  items: T[],
+  session: CollectionAccessSession,
+): T[] {
+  return items.filter((item) => isCollectionAccessAllowed(
+    item.access ?? DEFAULT_COLLECTION_ACCESS,
+    session,
+  ))
 }
 
 export interface StagedImageInfo {
@@ -835,6 +917,50 @@ export class MemesLunaService extends Service {
 
   private getCollectionDescriptionFile(collectionName: string) {
     return path.join(this.getCollectionDir(collectionName), '.description')
+  }
+
+  private getCollectionAccessFile(collectionName: string) {
+    return path.join(this.getCollectionDir(collectionName), '.access.json')
+  }
+
+  async getCollectionAccess(collectionName: string): Promise<CollectionAccess> {
+    if (!this.isValidCollectionName(collectionName)) return { ...DEFAULT_COLLECTION_ACCESS }
+    try {
+      return normalizeCollectionAccess(JSON.parse(await fs.readFile(this.getCollectionAccessFile(collectionName), 'utf8')))
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') {
+        try {
+          this.ctx.logger('memesluna').warn(`Failed to read access policy for collection "${collectionName}": ${error?.message || error}`)
+        } catch {
+          // 单元测试等无 logger 上下文时忽略
+        }
+      }
+      return { ...DEFAULT_COLLECTION_ACCESS }
+    }
+  }
+
+  async setCollectionAccess(collectionName: string, access: CollectionAccess): Promise<boolean> {
+    this.ensureCollectionName(collectionName)
+    if (!(await this.collectionExists(collectionName))) return false
+    if (!access || typeof access !== 'object' || !isCollectionAccessMode(access.mode)) {
+      throw new Error('Invalid collection access mode. Expected disabled, whitelist, or blacklist.')
+    }
+    const normalized = normalizeCollectionAccess(access)
+    const target = this.getCollectionAccessFile(collectionName)
+    const dir = path.dirname(target)
+    const temp = path.join(dir, `.access.json.${process.pid}.${Date.now()}.tmp`)
+    try {
+      await fs.writeFile(temp, JSON.stringify(normalized, null, 2), 'utf8')
+      await fs.rename(temp, target)
+    } catch (error) {
+      try {
+        await fs.unlink(temp)
+      } catch {
+        // 尽力删除临时文件，忽略清理失败
+      }
+      throw error
+    }
+    return true
   }
 
   async getCollectionDescription(collectionName: string): Promise<string> {
@@ -1515,6 +1641,7 @@ export class MemesLunaService extends Service {
     const localImages = await this.getCollectionImages(collectionName)
     const links = await this.getCollectionLinks(collectionName)
     const description = await this.getCollectionDescription(collectionName)
+    const access = await this.getCollectionAccess(collectionName)
     const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName }, ['created_at'])
     const dates = rows
       .map((row) => new Date(row.created_at as Date))
@@ -1544,6 +1671,7 @@ export class MemesLunaService extends Service {
       createdAt,
       updatedAt,
       cover: localImages[0],
+      access,
     }
   }
 

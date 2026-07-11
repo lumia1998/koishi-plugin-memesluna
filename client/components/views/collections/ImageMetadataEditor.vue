@@ -6,7 +6,7 @@
                       <div class="tag-editor-title">编辑语义标注</div>
                       <div class="tag-editor-subtitle">{{ tagEditorCollection }} / {{ tagEditorImage }}</div>
                     </div>
-                    <div style="display: flex; gap: 8px; align-items: center;">
+                    <div class="tag-editor-header-actions">
                       <button
                         @click="triggerAIAnnotation"
                         class="btn btn-secondary btn-small"
@@ -27,15 +27,15 @@
                       </button>
                     </div>
                   </div>
-                  <div class="tag-editor-body" style="display: flex; flex-direction: column; gap: 16px;">
+                  <div class="tag-editor-body">
                     <!-- Tags Section -->
-                    <div class="tag-section-wrapper" style="border-bottom: 1px solid rgba(120, 120, 120, 0.15); padding-bottom: 14px;">
-                      <div class="tag-section-label" style="font-weight: 600; font-size: 13px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                    <div class="tag-section-wrapper">
+                      <div class="tag-section-label">
                         <span>🏷️</span>
                         <span>语义标签 (Tags)</span>
-                        <span style="font-size: 11px; font-weight: normal; color: var(--k-text-muted, #888); margin-left: 4px;">用于跨合集关键词检索</span>
+                        <span class="tag-section-hint">用于跨合集关键词检索</span>
                       </div>
-                      <div class="tag-editor-list" style="margin-bottom: 8px; min-height: 36px; display: flex; flex-wrap: wrap; gap: 6px;">
+                      <div class="tag-editor-list">
                         <span
                           v-for="tag in tagEditorTags"
                           :key="tag"
@@ -44,9 +44,9 @@
                           {{ tag }}
                           <button @click="removeTagFromEditor(tag)" class="tag-remove-btn" :disabled="tagEditorSaving || aiAnnotating">×</button>
                         </span>
-                        <span v-if="!tagEditorTags.length" class="tag-editor-empty" style="color: var(--k-text-muted, #888); font-size: 12px; font-style: italic;">暂无标签</span>
+                        <span v-if="!tagEditorTags.length" class="tag-editor-empty">暂无标签</span>
                       </div>
-                      <div class="tag-editor-input-row" style="display: flex; gap: 8px;">
+                      <div class="tag-editor-input-row">
                         <input
                           v-model="tagEditorInput"
                           class="flat-input tag-editor-input"
@@ -54,7 +54,6 @@
                           placeholder="输入情绪、动作、场景或元素标签"
                           @keyup.enter="addTagFromEditor"
                           :disabled="tagEditorSaving || aiAnnotating"
-                          style="flex-grow: 1;"
                         />
                         <button @click="addTagFromEditor" class="btn btn-secondary btn-small" :disabled="!tagEditorInput.trim() || tagEditorSaving || aiAnnotating">
                           添加
@@ -64,31 +63,29 @@
 
                     <!-- Aliases Section -->
                     <div class="tag-section-wrapper">
-                      <div class="tag-section-label" style="font-weight: 600; font-size: 13px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                      <div class="tag-section-label">
                         <span>🔍</span>
                         <span>检索别名 (Aliases)</span>
-                        <span style="font-size: 11px; font-weight: normal; color: var(--k-text-muted, #888); margin-left: 4px;">用于 q=关键词 自然语言检索</span>
+                        <span class="tag-section-hint">用于 q=关键词 自然语言检索</span>
                       </div>
-                      <div class="tag-editor-list" style="margin-bottom: 8px; min-height: 36px; display: flex; flex-wrap: wrap; gap: 6px;">
+                      <div class="tag-editor-list">
                         <span
                           v-for="alias in tagEditorAliases"
                           :key="alias"
-                          class="tag-editor-tag"
-                          style="background-color: var(--k-bg-panel, rgba(120, 120, 120, 0.08)); border-color: transparent;"
+                          class="tag-editor-tag is-alias"
                         >
                           {{ alias }}
                           <button @click="removeAliasFromEditor(alias)" class="tag-remove-btn" :disabled="tagEditorSaving || aiAnnotating">×</button>
                         </span>
-                        <span v-if="!tagEditorAliases.length" class="tag-editor-empty" style="color: var(--k-text-muted, #888); font-size: 12px; font-style: italic;">暂无别名</span>
+                        <span v-if="!tagEditorAliases.length" class="tag-editor-empty">暂无别名</span>
                       </div>
-                      <div class="tag-editor-input-row" style="display: flex; gap: 8px;">
+                      <div class="tag-editor-input-row">
                         <input
                           v-model="aliasEditorInput"
                           class="flat-input tag-editor-input"
                           placeholder="输入自然语言检索短语，回车添加"
                           @keyup.enter="addAliasFromEditor"
                           :disabled="tagEditorSaving || aiAnnotating"
-                          style="flex-grow: 1;"
                         />
                         <button @click="addAliasFromEditor" class="btn btn-secondary btn-small" :disabled="!aliasEditorInput.trim() || tagEditorSaving || aiAnnotating">
                           添加
