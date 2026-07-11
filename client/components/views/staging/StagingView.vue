@@ -59,7 +59,25 @@
                 </div>
               </div>
               <div class="staging-grid">
-                <article v-for="item in group.items" :key="item.id" class="staging-card">
+                <article
+                  v-for="(item, index) in group.items"
+                  :key="item.id"
+                  class="staging-card"
+                  :class="{
+                    'staging-card-selected': isStagedSelected(item.id),
+                    'notion-gallery-card-active-dropdown': activeCardMenu === stagedMenuKey(item.id),
+                    'submenu-open-right': isFirstStagingColumn(index),
+                  }"
+                >
+                  <button
+                    class="staging-select-toggle"
+                    @click.stop="toggleStagedSelection(item.id)"
+                    :title="isStagedSelected(item.id) ? '取消选择' : '选择图片'"
+                  >
+                    <svg v-if="isStagedSelected(item.id)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  </button>
                   <button class="staging-image-shell" @click="openImage(getStagedImageUrl(item.id))" title="打开原图">
                     <img
                       class="staging-image"
@@ -70,42 +88,47 @@
                   </button>
 
                   <div class="staging-card-body">
-                    <div class="staging-title-row">
+                    <div class="gallery-card-footer-row">
                       <div class="staging-title" :title="item.originalName || item.filename">
                         {{ item.originalName || item.filename }}
                       </div>
-                      <span class="staging-ext-tag">{{ getImageExtension(item.filename) }}</span>
+                      <div class="gallery-card-menu-container">
+                        <button class="gallery-card-menu-btn" @click.stop="toggleCardMenu(stagedMenuKey(item.id))" title="更多操作">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                            <circle cx="12" cy="12" r="1.5"></circle>
+                            <circle cx="19" cy="12" r="1.5"></circle>
+                            <circle cx="5" cy="12" r="1.5"></circle>
+                          </svg>
+                        </button>
+                        <div class="gallery-card-menu-dropdown" v-show="activeCardMenu === stagedMenuKey(item.id)" @click.stop>
+                          <div v-if="collections.length" class="gallery-card-submenu-trigger">
+                            <span>移动至表情包</span>
+                            <div class="gallery-card-submenu">
+                              <button
+                                v-for="collection in collections"
+                                :key="collection.name"
+                                :disabled="stagingBusyId === item.id"
+                                @click="promoteStagedImage(item, collection.name); closeCardMenu()"
+                              >
+                                {{ collection.name }}
+                              </button>
+                            </div>
+                          </div>
+                          <button
+                            class="danger"
+                            :disabled="stagingBusyId === item.id"
+                            @click="deleteStagedImage(item); closeCardMenu()"
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
                     </div>
-
                     <div class="staging-meta-grid">
                       <span :title="item.reason || '暂缓候选'">{{ item.reason || '暂缓候选' }}</span>
                       <span>{{ item.source || 'filter' }}</span>
                       <span>{{ formatSize(item.size) }}</span>
                       <span>{{ formatDate(item.createdAt) }}</span>
-                    </div>
-
-                    <select v-model="stagingTargetCollection[item.id]" class="flat-select staging-select" :disabled="!collections.length">
-                      <option value="">选择目标表情包</option>
-                      <option v-for="collection in collections" :key="collection.name" :value="collection.name">
-                        {{ collection.name }}
-                      </option>
-                    </select>
-
-                    <div class="staging-actions">
-                      <button
-                        @click="promoteStagedImage(item)"
-                        class="staging-action-btn secondary"
-                        :disabled="stagingBusyId === item.id || !stagingTargetCollection[item.id]"
-                      >
-                        {{ stagingBusyId === item.id ? '处理中...' : '归档' }}
-                      </button>
-                      <button
-                        @click="deleteStagedImage(item)"
-                        class="staging-action-btn danger"
-                        :disabled="stagingBusyId === item.id"
-                      >
-                        删除
-                      </button>
                     </div>
                   </div>
                 </article>
@@ -136,8 +159,17 @@
               </div>
             </div>
 
-            <div class="staging-grid">
-              <article v-for="item in filteredStagedImages" :key="item.id" class="staging-card" :class="{ 'staging-card-selected': isStagedSelected(item.id) }">
+            <div ref="stagingGridEl" class="staging-grid">
+              <article
+                v-for="(item, index) in filteredStagedImages"
+                :key="item.id"
+                class="staging-card"
+                :class="{
+                  'staging-card-selected': isStagedSelected(item.id),
+                  'notion-gallery-card-active-dropdown': activeCardMenu === stagedMenuKey(item.id),
+                  'submenu-open-right': isFirstStagingColumn(index),
+                }"
+              >
                 <button
                   class="staging-select-toggle"
                   @click.stop="toggleStagedSelection(item.id)"
@@ -157,42 +189,47 @@
                 </button>
 
                 <div class="staging-card-body">
-                  <div class="staging-title-row">
+                  <div class="gallery-card-footer-row">
                     <div class="staging-title" :title="item.originalName || item.filename">
                       {{ item.originalName || item.filename }}
                     </div>
-                    <span class="staging-ext-tag">{{ getImageExtension(item.filename) }}</span>
+                    <div class="gallery-card-menu-container">
+                      <button class="gallery-card-menu-btn" @click.stop="toggleCardMenu(stagedMenuKey(item.id))" title="更多操作">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                          <circle cx="12" cy="12" r="1.5"></circle>
+                          <circle cx="19" cy="12" r="1.5"></circle>
+                          <circle cx="5" cy="12" r="1.5"></circle>
+                        </svg>
+                      </button>
+                      <div class="gallery-card-menu-dropdown" v-show="activeCardMenu === stagedMenuKey(item.id)" @click.stop>
+                        <div v-if="collections.length" class="gallery-card-submenu-trigger">
+                          <span>移动至表情包</span>
+                          <div class="gallery-card-submenu">
+                            <button
+                              v-for="collection in collections"
+                              :key="collection.name"
+                              :disabled="stagingBusyId === item.id"
+                              @click="promoteStagedImage(item, collection.name); closeCardMenu()"
+                            >
+                              {{ collection.name }}
+                            </button>
+                          </div>
+                        </div>
+                        <button
+                          class="danger"
+                          :disabled="stagingBusyId === item.id"
+                          @click="deleteStagedImage(item); closeCardMenu()"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </div>
                   </div>
-
                   <div class="staging-meta-grid">
                     <span :title="item.reason || '暂缓候选'">{{ item.reason || '暂缓候选' }}</span>
                     <span>{{ item.source || 'filter' }}</span>
                     <span>{{ formatSize(item.size) }}</span>
                     <span>{{ formatDate(item.createdAt) }}</span>
-                  </div>
-
-                  <select v-model="stagingTargetCollection[item.id]" class="flat-select staging-select" :disabled="!collections.length">
-                    <option value="">选择目标表情包</option>
-                    <option v-for="collection in collections" :key="collection.name" :value="collection.name">
-                      {{ collection.name }}
-                    </option>
-                  </select>
-
-                  <div class="staging-actions">
-                    <button
-                      @click="promoteStagedImage(item)"
-                      class="staging-action-btn secondary"
-                      :disabled="stagingBusyId === item.id || !stagingTargetCollection[item.id]"
-                    >
-                      {{ stagingBusyId === item.id ? '处理中...' : '归档' }}
-                    </button>
-                    <button
-                      @click="deleteStagedImage(item)"
-                      class="staging-action-btn danger"
-                      :disabled="stagingBusyId === item.id"
-                    >
-                      删除
-                    </button>
                   </div>
                 </div>
               </article>
@@ -201,13 +238,64 @@
         </div>
 </template>
 <script lang="ts">
-import { defineComponent } from 'vue'
+import { defineComponent, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useDashboardContext } from '../../../composables/dashboardContext'
 
 export default defineComponent({
   name: 'StagingView',
   setup() {
-    return useDashboardContext()
+    const ctx = useDashboardContext()
+    const stagingGridEl = ref<HTMLElement | null>(null)
+    const stagingColumnCount = ref(1)
+
+    function stagedMenuKey(id: string) {
+      return `staged:${id}`
+    }
+
+    function updateStagingColumnCount() {
+      const el = stagingGridEl.value
+      if (!el) {
+        stagingColumnCount.value = 1
+        return
+      }
+      const styles = getComputedStyle(el)
+      const cols = styles.gridTemplateColumns
+        .split(' ')
+        .map((part) => part.trim())
+        .filter(Boolean)
+      stagingColumnCount.value = Math.max(1, cols.length || 1)
+    }
+
+    function isFirstStagingColumn(index: number): boolean {
+      return index % stagingColumnCount.value === 0
+    }
+
+    let resizeObserver: ResizeObserver | null = null
+
+    onMounted(() => {
+      nextTick(updateStagingColumnCount)
+      if (typeof ResizeObserver !== 'undefined') {
+        resizeObserver = new ResizeObserver(() => updateStagingColumnCount())
+        if (stagingGridEl.value) resizeObserver.observe(stagingGridEl.value)
+      }
+      window.addEventListener('resize', updateStagingColumnCount)
+    })
+
+    onUnmounted(() => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', updateStagingColumnCount)
+    })
+
+    watch(
+      () => [ctx.filteredStagedImages.value.length, ctx.stagingViewMode.value],
+      () => nextTick(updateStagingColumnCount),
+    )
+
+    return Object.assign({}, ctx, {
+      stagingGridEl,
+      stagedMenuKey,
+      isFirstStagingColumn,
+    })
   },
 })
 </script>

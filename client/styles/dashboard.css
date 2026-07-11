@@ -1321,33 +1321,10 @@ body.dark .memesluna-app-layout {
   padding: 10px 12px;
   background: var(--k-bg-card, #fff);
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
   flex: 1;
   min-width: 0;
   box-sizing: border-box;
-}
-.notion-gallery-grid.list-mode {
-  grid-template-columns: 1fr;
-  gap: 8px;
-}
-.notion-gallery-grid.list-mode .notion-gallery-card {
-  aspect-ratio: auto;
-  min-height: 76px;
-  display: grid;
-  grid-template-columns: 96px 1fr;
-  align-items: center;
-  gap: 12px;
-  padding: 8px;
-  border: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
-  background-color: var(--k-bg-card, #ffffff);
-}
-.notion-gallery-grid.list-mode .gallery-img-container {
-  height: 68px;
-}
-.notion-gallery-grid.list-mode .gallery-card-info {
-  padding: 0;
-  background: transparent;
 }
 .gallery-card-footer-row {
   display: flex;
@@ -1356,9 +1333,11 @@ body.dark .memesluna-app-layout {
   gap: 8px;
   position: relative;
   width: 100%;
+  min-width: 0;
 }
 .gallery-card-tags-placeholder {
   flex: 1;
+  min-width: 0;
 }
 .notion-gallery-card-active-dropdown {
   overflow: visible !important;
@@ -1373,10 +1352,12 @@ body.dark .memesluna-app-layout {
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+  line-height: 22px;
 }
 .gallery-card-menu-container {
   position: relative;
   display: inline-flex;
+  flex: 0 0 auto;
 }
 .gallery-card-menu-btn {
   background: transparent;
@@ -1406,7 +1387,8 @@ body.dark .memesluna-app-layout {
   bottom: 100%;
   right: 0;
   margin-bottom: 6px;
-  min-width: 130px;
+  min-width: 150px;
+  max-width: min(260px, 72vw);
   background-color: var(--k-bg-card, #ffffff);
   border: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.15));
   border-radius: 6px;
@@ -1435,6 +1417,10 @@ body.dark .memesluna-app-layout {
 }
 .gallery-card-menu-dropdown button.danger:hover {
   background-color: var(--memesluna-danger-soft-bg);
+}
+.gallery-card-menu-dropdown button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 /* Card Submenu for moving */
 .gallery-card-submenu-trigger {
@@ -1470,6 +1456,14 @@ body.dark .memesluna-app-layout {
   pointer-events: none;
   transition: opacity 0.1s ease;
 }
+/* First column: open submenu to the right to avoid clipping */
+.notion-gallery-card.submenu-open-right .gallery-card-submenu,
+.staging-card.submenu-open-right .gallery-card-submenu {
+  right: auto;
+  left: 100%;
+  margin-right: 0;
+  margin-left: 6px;
+}
 .gallery-card-submenu-trigger:hover .gallery-card-submenu {
   opacity: 1;
   pointer-events: auto;
@@ -1478,12 +1472,23 @@ body.dark .memesluna-app-layout {
   padding: 5px 8px;
   font-size: 0.72rem;
 }
-/* Tags in the card */
-.gallery-card-tags {
+/* Tags only appear inside the more-actions menu */
+.gallery-card-menu-tags {
+  padding: 8px 8px 9px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--k-color-border, rgba(55, 53, 47, 0.12));
+}
+.gallery-card-menu-tags-title {
+  margin-bottom: 6px;
+  color: var(--k-text-muted, rgba(55, 53, 47, 0.55));
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.gallery-card-menu-tag-list {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  min-height: 20px;
   align-items: center;
 }
 .gallery-card-tag-badge {
@@ -1493,6 +1498,7 @@ body.dark .memesluna-app-layout {
   border-radius: 4px;
   border: 1px solid transparent;
   white-space: nowrap;
+  line-height: 1.25;
 }
 .gallery-card-tag-more {
   background-color: var(--k-bg-panel, rgba(55, 53, 47, 0.06));
@@ -1809,7 +1815,7 @@ body.dark .memesluna-app-layout {
 .staging-card {
   position: relative;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--memesluna-border);
   border-radius: 8px;
   background-color: var(--memesluna-bg-card);
@@ -1890,6 +1896,16 @@ body.dark .memesluna-app-layout {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+.staging-card.notion-gallery-card-active-dropdown {
+  z-index: 60;
+}
+.staging-card .gallery-card-footer-row {
+  align-items: center;
+}
+.staging-card .staging-title {
+  flex: 1;
+  min-width: 0;
 }
 .staging-title-row {
   display: flex;

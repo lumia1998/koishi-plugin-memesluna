@@ -948,8 +948,8 @@ export function useDashboard() {
     await loadSimilarStagedImages()
   }
 
-  async function promoteStagedImage(item: StagedImageInfo) {
-    const target = stagingTargetCollection.value[item.id]
+  async function promoteStagedImage(item: StagedImageInfo, targetCollection?: string) {
+    const target = (targetCollection || stagingTargetCollection.value[item.id] || '').trim()
     if (!target) {
       showToast('请选择目标表情包', 'error')
       return
@@ -960,6 +960,7 @@ export function useDashboard() {
       if (filename) {
         showToast(`已归档到表情包 "${target}"，新文件名 ${filename}`, 'success')
         delete stagingTargetCollection.value[item.id]
+        selectedStagedIds.value = new Set([...selectedStagedIds.value].filter((id) => id !== item.id))
       } else {
         showToast('暂缓图片不存在或已被处理', 'error')
       }

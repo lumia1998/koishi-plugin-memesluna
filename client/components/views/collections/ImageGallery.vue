@@ -95,15 +95,16 @@
                   </div>
                 </div>
 
-                <div :class="['notion-gallery-grid', galleryViewMode === 'list' ? 'list-mode' : '']">
+                <div ref="galleryGridEl" :class="['notion-gallery-grid', galleryViewMode === 'list' ? 'list-mode' : '']">
                   <div
-                    v-for="item in paginatedGalleryItems"
+                    v-for="(item, index) in paginatedGalleryItems"
                     :key="item.id"
                     class="notion-gallery-card"
                     :class="{
                       'notion-gallery-card-active-dropdown': activeCardMenu === item.value,
                       'selected': item.type === 'local' && isImageSelected(item.value),
-                      'external': item.type === 'external'
+                      'external': item.type === 'external',
+                      'submenu-open-right': isFirstGridColumn(index)
                     }"
                   >
                     <button
@@ -130,23 +131,8 @@
                       <span class="image-format-badge" :class="item.type">{{ item.type === 'external' ? 'LINK' : getImageExtension(item.value) }}</span>
                     </div>
                     <div class="gallery-card-info">
-                      <div class="gallery-card-title" :title="item.label">{{ item.label }}</div>
                       <div class="gallery-card-footer-row">
-                        <div v-if="item.type === 'local'" class="gallery-card-tags">
-                          <span
-                            v-for="tag in getVisibleImageTags(item.value)"
-                            :key="tag"
-                            class="gallery-card-tag-badge"
-                            :style="{ backgroundColor: tagColor(tag) + '12', color: tagColor(tag), borderColor: tagColor(tag) + '22' }"
-                          >{{ tag }}</span>
-                          <span
-                            v-if="getHiddenImageTagsCount(item.value)"
-                            class="gallery-card-tag-badge gallery-card-tag-more"
-                            :title="getImageTags(item.value).join('、')"
-                          >+{{ getHiddenImageTagsCount(item.value) }}</span>
-                          <span v-if="!getImageTags(item.value).length" class="gallery-card-tag-empty">暂无标签</span>
-                        </div>
-                        <div v-else class="gallery-card-tags-placeholder"></div>
+                        <div class="gallery-card-title" :title="item.label">{{ item.label }}</div>
 
                         <div class="gallery-card-menu-container">
                           <button class="gallery-card-menu-btn" @click.stop="toggleCardMenu(item.value)" title="更多操作">
@@ -156,9 +142,19 @@
                               <circle cx="5" cy="12" r="1.5"></circle>
                             </svg>
                           </button>
-                          <!-- Dropdown menu -->
                           <div class="gallery-card-menu-dropdown" v-show="activeCardMenu === item.value" @click.stop>
                             <template v-if="item.type === 'local'">
+                              <div v-if="getImageTags(item.value).length" class="gallery-card-menu-tags">
+                                <div class="gallery-card-menu-tags-title">语义标签</div>
+                                <div class="gallery-card-menu-tag-list">
+                                  <span
+                                    v-for="tag in getImageTags(item.value)"
+                                    :key="tag"
+                                    class="gallery-card-tag-badge"
+                                    :style="{ backgroundColor: tagColor(tag) + '14', color: tagColor(tag), borderColor: tagColor(tag) + '30' }"
+                                  >{{ tag }}</span>
+                                </div>
+                              </div>
                               <button @click="openTagEditor(currentCollection.name, item.value); closeCardMenu()">编辑标注</button>
                               <div v-if="collections.length > 1" class="gallery-card-submenu-trigger">
                                 <span>移动至表情包</span>
@@ -207,13 +203,63 @@
               </section>
 </template>
 <script lang="ts">
-import { defineComponent } from 'vue'
+import { defineComponent, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useDashboardContext } from '../../../composables/dashboardContext'
 
 export default defineComponent({
   name: 'ImageGallery',
   setup() {
-    return useDashboardContext()
+    const ctx = useDashboardContext()
+    const galleryGridEl = ref<HTMLElement | null>(null)
+    const galleryColumnCount = ref(1)
+
+    function updateGalleryColumnCount() {
+      const el = galleryGridEl.value
+      if (!el) {
+        galleryColumnCount.value = 1
+        return
+      }
+      if (ctx.galleryViewMode.value === 'list') {
+        galleryColumnCount.value = 1
+        return
+      }
+      const styles = getComputedStyle(el)
+      const cols = styles.gridTemplateColumns
+        .split(' ')
+        .map((part) => part.trim())
+        .filter(Boolean)
+      galleryColumnCount.value = Math.max(1, cols.length || 1)
+    }
+
+    function isFirstGridColumn(index: number): boolean {
+      return index % galleryColumnCount.value === 0
+    }
+
+    let resizeObserver: ResizeObserver | null = null
+
+    onMounted(() => {
+      nextTick(updateGalleryColumnCount)
+      if (typeof ResizeObserver !== 'undefined') {
+        resizeObserver = new ResizeObserver(() => updateGalleryColumnCount())
+        if (galleryGridEl.value) resizeObserver.observe(galleryGridEl.value)
+      }
+      window.addEventListener('resize', updateGalleryColumnCount)
+    })
+
+    onUnmounted(() => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', updateGalleryColumnCount)
+    })
+
+    watch(
+      () => [ctx.galleryViewMode.value, ctx.paginatedGalleryItems.value.length, ctx.currentPage.value],
+      () => nextTick(updateGalleryColumnCount),
+    )
+
+    return Object.assign({}, ctx, {
+      galleryGridEl,
+      isFirstGridColumn,
+    })
   },
 })
 </script>
