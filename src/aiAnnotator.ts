@@ -15,6 +15,8 @@ import {
   AI_IMAGE_TARGET_SIZE,
   AI_IMAGE_JPEG_QUALITY,
 } from './constants'
+import { getImageMimeFromBytes } from './image-format'
+import { normalizeMetadataList } from './utils'
 
 const tryParse = <T>(text: string): T | null => {
     try {
@@ -64,68 +66,11 @@ export interface AnnotateContext {
 
 function normalizeAnnotationList(value: unknown, maxItems: number, maxLength: number): string[] {
     if (!Array.isArray(value)) return []
-
-    const result: string[] = []
-    const seen = new Set<string>()
-
-    for (const item of value) {
-        if (typeof item !== 'string') continue
-        const normalized = item.trim().replace(/\s+/g, ' ')
-        if (!normalized || normalized.length > maxLength) continue
-
-        const key = normalized.toLowerCase()
-        if (seen.has(key)) continue
-        seen.add(key)
-        result.push(normalized)
-
-        if (result.length >= maxItems) break
-    }
-
-    return result
-}
-
-function getImageMimeFromBytes(buffer: Buffer): string {
-    if (buffer.length >= 4) {
-        // GIF: 47 49 46 38 (GIF8)
-        if (
-            buffer[0] === 0x47 &&
-            buffer[1] === 0x49 &&
-            buffer[2] === 0x46 &&
-            buffer[3] === 0x38
-        ) {
-            return 'image/gif'
-        }
-        // PNG: 89 50 4E 47
-        if (
-            buffer[0] === 0x89 &&
-            buffer[1] === 0x50 &&
-            buffer[2] === 0x4e &&
-            buffer[3] === 0x47
-        ) {
-            return 'image/png'
-        }
-        // WEBP: RIFF....WEBP
-        if (
-            buffer[0] === 0x52 &&
-            buffer[1] === 0x49 &&
-            buffer[2] === 0x46 &&
-            buffer[3] === 0x46 &&
-            buffer.length >= 12 &&
-            buffer[8] === 0x57 &&
-            buffer[9] === 0x45 &&
-            buffer[10] === 0x42 &&
-            buffer[11] === 0x50
-        ) {
-            return 'image/webp'
-        }
-    }
-    if (buffer.length >= 3) {
-        // JPG: FF D8 FF
-        if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-            return 'image/jpeg'
-        }
-    }
-    return 'image/png'
+    return normalizeMetadataList(
+        value.filter((item): item is string => typeof item === 'string'),
+        maxItems,
+        maxLength
+    )
 }
 
 async function compressImageForAI(buffer: Buffer): Promise<{ buffer: Buffer; mimeType: string }> {

@@ -5,48 +5,31 @@ import { Context, Service, Eval } from 'koishi'
 import type { Config } from './config'
 import type { AIAnnotator } from './aiAnnotator'
 import {
+  BACKFILL_CONCURRENCY,
   DHASH_BITS,
   DHASH_WIDTH,
   DHASH_HEIGHT,
 } from './constants'
+import { sanitizeFilename } from './filename'
+import { mimeFromFilename } from './image-format'
+import { sleep } from './utils'
+
+/** 有限并发池，按顺序领取任务执行 */
+async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>) {
+  if (!items.length) return
+  let i = 0
+  const workers = Array(Math.min(concurrency, items.length)).fill(null).map(async () => {
+    while (i < items.length) {
+      const item = items[i++]
+      await fn(item)
+    }
+  })
+  await Promise.all(workers)
+}
 
 export const MEMESLUNA_IMAGES_UPDATED = 'memesluna/images-updated'
 
-export function sanitizeFilename(filename: string): string {
-  // 先提取扩展名
-  const ext = path.extname(filename).toLowerCase()
-
-  // 移除扩展名后的部分
-  let base = ext ? filename.slice(0, filename.length - ext.length) : filename
-
-  // 过滤危险字符（将路径分隔符也替换）
-  base = base.replace(/[\s/\\?%*:|"<>,;=@]+/g, '_')
-
-  // 移除前导/尾随点和下划线
-  base = base.replace(/^[._]+|[._]+$/g, '')
-
-  // 如果清理后为空，使用随机名
-  if (!base) {
-    base = `file_${Date.now()}`
-  }
-
-  // Windows 保留名检查
-  const reserved = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i
-  if (reserved.test(base)) {
-    base = `_${base}`
-  }
-
-  // 限制长度（255字节 - 扩展名 - 余量）
-  const maxLen = 200 - ext.length
-  if (Buffer.byteLength(base, 'utf8') > maxLen) {
-    // 截断到安全长度
-    while (Buffer.byteLength(base, 'utf8') > maxLen && base.length > 1) {
-      base = base.slice(0, -1)
-    }
-  }
-
-  return `${base}${ext}`
-}
+export { sanitizeFilename } from './filename'
 
 const IMAGE_EXTENSIONS = new Set([
   '.jpg',
@@ -180,7 +163,6 @@ export interface CollectionInfo {
   createdAt?: Date
   updatedAt?: Date
   cover?: string
-  access: CollectionAccess
 }
 
 export interface CollectionResource {
@@ -188,90 +170,6 @@ export interface CollectionResource {
   filename?: string
   value: string
   public_url?: string
-}
-
-export type CollectionAccessMode = 'disabled' | 'whitelist' | 'blacklist'
-
-export interface CollectionAccess {
-  mode: CollectionAccessMode
-  groups: string[]
-}
-
-export interface CollectionAccessSession {
-  platform?: string
-  guildId?: string
-  channelId?: string
-  /** 私聊会话：为 true 时始终允许，即便带有 channelId（部分适配器私聊也有 channelId） */
-  isDirect?: boolean
-}
-
-const DEFAULT_COLLECTION_ACCESS: CollectionAccess = { mode: 'disabled', groups: [] }
-
-export function isCollectionAccessMode(value: unknown): value is CollectionAccessMode {
-  return value === 'disabled' || value === 'whitelist' || value === 'blacklist'
-}
-
-export function normalizeCollectionAccess(value: unknown): CollectionAccess {
-  if (!value || typeof value !== 'object') return { ...DEFAULT_COLLECTION_ACCESS }
-  const input = value as { mode?: unknown; groups?: unknown }
-  if (!isCollectionAccessMode(input.mode)) {
-    return { ...DEFAULT_COLLECTION_ACCESS }
-  }
-  const groups = Array.isArray(input.groups)
-    ? Array.from(new Set(input.groups.filter((group): group is string => typeof group === 'string').map((group) => group.trim()).filter(Boolean)))
-    : []
-  return { mode: input.mode, groups }
-}
-
-export function getSessionAccessCandidates(session: CollectionAccessSession): string[] {
-  // 仅匹配裸群号（guildId / channelId），不使用 platform: 前缀
-  return Array.from(new Set(
-    [session.guildId, session.channelId]
-      .filter((value): value is string => typeof value === 'string' && !!value.trim())
-      .map((value) => value.trim()),
-  ))
-}
-
-export function isCollectionAccessAllowed(access: CollectionAccess, session: CollectionAccessSession): boolean {
-  const normalized = normalizeCollectionAccess(access)
-  if (normalized.mode === 'disabled') return true
-  // 不能用“缺少 guildId”判断私聊：部分群适配器只有 channelId
-  if (session.isDirect === true) return true
-  const candidates = getSessionAccessCandidates(session)
-  if (!candidates.length) return true
-  const matched = candidates.some((candidate) => normalized.groups.includes(candidate))
-  return normalized.mode === 'whitelist' ? matched : !matched
-}
-
-/** 从 Koishi session 组装访问判定上下文（可测） */
-export function toCollectionAccessSession(session: {
-  platform?: string
-  guildId?: string
-  channelId?: string
-  isDirect?: boolean
-  subtype?: string
-} | null | undefined): CollectionAccessSession {
-  if (!session) return {}
-  const isDirect = session.isDirect === true
-    || session.subtype === 'private'
-    || (!session.guildId && !session.channelId)
-  return {
-    platform: session.platform,
-    guildId: session.guildId,
-    channelId: session.channelId,
-    isDirect: isDirect || undefined,
-  }
-}
-
-/** 按会话过滤合集列表（可测）；私聊与 disabled 策略均保留 */
-export function filterCollectionsByAccess<T extends { access?: CollectionAccess }>(
-  items: T[],
-  session: CollectionAccessSession,
-): T[] {
-  return items.filter((item) => isCollectionAccessAllowed(
-    item.access ?? DEFAULT_COLLECTION_ACCESS,
-    session,
-  ))
 }
 
 export interface StagedImageInfo {
@@ -332,6 +230,8 @@ export class MemesLunaService extends Service {
   private _readyPromise: Promise<void>
   private _readyResolve: () => void
   private _annotator: AIAnnotator | null = null
+  /** 进程内标注任务串行链，避免 stole / tagall 并行开多套 worker */
+  private _annotationChain: Promise<void> = Promise.resolve()
 
   constructor(ctx: Context, public config: Config) {
     super(ctx, 'memesluna', true)
@@ -366,49 +266,86 @@ export class MemesLunaService extends Service {
   }
 
   /**
-   * 将已存在于数据库的图片行推入 AI 标注队列（异步执行，不阻塞调用方）
-   * 供 .stole 命令在偷图成功后调用
+   * 将已存在于数据库的图片行推入 AI 标注队列。
+   * 并发调用通过 `_annotationChain` 串行化批次，避免 stole / tagall 并行开多套 worker。
+   * @param rows 图片数据库行
+   * @param options.force 为 true 时跳过“已有标签/别名则跳过”的检查
+   * @param options.onProgress 每处理完一张（成功或失败）后回调
    */
-  async queueAnnotation(rows: any[]): Promise<void> {
-    if (!this._annotator || !rows.length) return
-    const concurrency = this.config.aiConcurrency || 2
-    const queue = [...rows]
+  async queueAnnotation(
+    rows: any[],
+    options?: {
+      force?: boolean
+      onProgress?: (success: number, fail: number) => void | Promise<void>
+    }
+  ): Promise<{ success: number; fail: number }> {
+    if (!this._annotator || !rows.length) return { success: 0, fail: 0 }
 
-    const worker = async () => {
-      while (queue.length > 0) {
-        const row = queue.shift()
-        if (!row) break
-        try {
-          const stored = row.id ? await this.getImageById(row.id) : null
-          if (stored) {
-            let aliases: string[] = []
-            let tags: string[] = []
-            try { const p = JSON.parse(stored.aliases || '[]'); aliases = Array.isArray(p) ? p : [] } catch {}
-            try { const p = JSON.parse(stored.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
-            if (aliases.length > 0 || tags.length > 0) continue
-          }
+    const run = async (): Promise<{ success: number; fail: number }> => {
+      if (!this._annotator) return { success: 0, fail: 0 }
+      const concurrency = this.config.aiConcurrency || 2
+      const queue = [...rows]
+      const force = !!options?.force
+      let success = 0
+      let fail = 0
 
-          const image = await this.getLocalImageBuffer(row.collection, row.filename)
-          if (!image) continue
-          const result = await this._annotator!.annotate(image.buffer, {
-            filename: row.filename,
-            collectionName: row.collection,
-            imageUrl: `${this.config.backendPath}/${encodeURIComponent(row.collection)}/${encodeURIComponent(row.filename)}`,
-          })
-          if (result) {
-            await this.updateImageAnnotation(row.id, result.aliases, result.tags)
+      const worker = async () => {
+        while (queue.length > 0) {
+          const row = queue.shift()
+          if (!row) break
+          try {
+            if (row.type && row.type !== 'local') {
+              continue
+            }
+
+            if (!force) {
+              const stored = row.id ? await this.getImageById(row.id) : null
+              if (stored) {
+                let aliases: string[] = []
+                let tags: string[] = []
+                try { const p = JSON.parse(stored.aliases || '[]'); aliases = Array.isArray(p) ? p : [] } catch {}
+                try { const p = JSON.parse(stored.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
+                if (aliases.length > 0 || tags.length > 0) continue
+              }
+            }
+
+            const image = await this.getLocalImageBuffer(row.collection, row.filename)
+            if (!image) {
+              fail++
+              if (options?.onProgress) await options.onProgress(success, fail)
+              continue
+            }
+            const result = await this._annotator!.annotate(image.buffer, {
+              filename: row.filename,
+              collectionName: row.collection,
+              imageUrl: `${this.config.backendPath}/${encodeURIComponent(row.collection)}/${encodeURIComponent(row.filename)}`,
+            })
+            if (result) {
+              await this.updateImageAnnotation(row.id, result.aliases, result.tags)
+              success++
+            } else {
+              fail++
+            }
+            if (options?.onProgress) await options.onProgress(success, fail)
+            if (queue.length > 0 && this.config.aiBatchDelay > 0) {
+              await sleep(this.config.aiBatchDelay)
+            }
+          } catch (err) {
+            fail++
+            if (options?.onProgress) await options.onProgress(success, fail)
+            this.ctx.logger('memesluna').warn(`queueAnnotation failed for ${row.filename}:`, err)
           }
-          if (queue.length > 0 && this.config.aiBatchDelay > 0) {
-            await new Promise((resolve) => setTimeout(resolve, this.config.aiBatchDelay))
-          }
-        } catch (err) {
-          this.ctx.logger('memesluna').warn(`queueAnnotation failed for ${row.filename}:`, err)
         }
       }
+
+      const workers = Array(Math.min(concurrency, rows.length)).fill(null).map(() => worker())
+      await Promise.all(workers)
+      return { success, fail }
     }
 
-    const workers = Array(Math.min(concurrency, rows.length)).fill(null).map(() => worker())
-    await Promise.all(workers)
+    const resultPromise = this._annotationChain.then(run, run)
+    this._annotationChain = resultPromise.then(() => undefined, () => undefined)
+    return resultPromise
   }
 
 
@@ -706,8 +643,9 @@ export class MemesLunaService extends Service {
         { perceptual_hash: { $exists: false } }
       ]
     })
-    for (const row of images) {
-      if (row.hash && row.perceptual_hash) continue
+    let updated = 0
+    await mapPool(images, BACKFILL_CONCURRENCY, async (row) => {
+      if (row.hash && row.perceptual_hash) return
       const buffer = await this.getImageRowBuffer(row)
       if (!buffer) {
         if (!row.hash || row.perceptual_hash === undefined) {
@@ -715,10 +653,15 @@ export class MemesLunaService extends Service {
             hash: row.hash || '',
             perceptual_hash: row.perceptual_hash || '',
           })
+          updated++
         }
-        continue
+        return
       }
       await this.ctx.database.set('memesluna_images', { id: row.id }, await this.getImageFingerprints(buffer))
+      updated++
+    })
+    if (updated > 0) {
+      this.ctx.logger('memesluna').debug(`backfillImagesFingerprints updated ${updated} rows`)
     }
   }
 
@@ -731,17 +674,23 @@ export class MemesLunaService extends Service {
         { perceptual_hash: { $exists: false } }
       ]
     })
-    for (const row of stagedRows) {
-      if (row.hash && row.perceptual_hash) continue
+    let updated = 0
+    await mapPool(stagedRows, BACKFILL_CONCURRENCY, async (row) => {
+      if (row.hash && row.perceptual_hash) return
       try {
         const buffer = await fs.readFile(this.resolveStagedImagePath(row.filename))
         await this.ctx.database.set('memesluna_staged_images', { id: row.id }, await this.getImageFingerprints(buffer))
+        updated++
       } catch {
         await this.ctx.database.set('memesluna_staged_images', { id: row.id }, {
           hash: row.hash || '',
           perceptual_hash: row.perceptual_hash || '',
         })
+        updated++
       }
+    })
+    if (updated > 0) {
+      this.ctx.logger('memesluna').debug(`backfillStagedFingerprints updated ${updated} rows`)
     }
   }
 
@@ -858,11 +807,33 @@ export class MemesLunaService extends Service {
 
     for (const item of items) parent.set(item.id, item.id)
 
-    for (let i = 0; i < items.length; i++) {
-      for (let j = i + 1; j < items.length; j++) {
-        const similarity = this.getHashSimilarity(items[i].perceptualHash, items[j].perceptualHash)
-        if (similarity >= normalizedThreshold) {
-          union(items[i].id, items[j].id, similarity)
+    const linkIfSimilar = (i: number, j: number) => {
+      const similarity = this.getHashSimilarity(items[i].perceptualHash, items[j].perceptualHash)
+      if (similarity >= normalizedThreshold) {
+        union(items[i].id, items[j].id, similarity)
+      }
+    }
+
+    // 小规模全量两两比较；大规模用感知哈希前 3 位 hex 分桶，桶内两两比较（性能优先，极少数跨桶近邻可能漏检）
+    if (items.length <= 200) {
+      for (let i = 0; i < items.length; i++) {
+        for (let j = i + 1; j < items.length; j++) {
+          linkIfSimilar(i, j)
+        }
+      }
+    } else {
+      const buckets = new Map<string, number[]>()
+      for (let i = 0; i < items.length; i++) {
+        const key = (items[i].perceptualHash || '').slice(0, 3)
+        const list = buckets.get(key)
+        if (list) list.push(i)
+        else buckets.set(key, [i])
+      }
+      for (const indices of buckets.values()) {
+        for (let a = 0; a < indices.length; a++) {
+          for (let b = a + 1; b < indices.length; b++) {
+            linkIfSimilar(indices[a], indices[b])
+          }
         }
       }
     }
@@ -920,50 +891,6 @@ export class MemesLunaService extends Service {
 
   private getCollectionDescriptionFile(collectionName: string) {
     return path.join(this.getCollectionDir(collectionName), '.description')
-  }
-
-  private getCollectionAccessFile(collectionName: string) {
-    return path.join(this.getCollectionDir(collectionName), '.access.json')
-  }
-
-  async getCollectionAccess(collectionName: string): Promise<CollectionAccess> {
-    if (!this.isValidCollectionName(collectionName)) return { ...DEFAULT_COLLECTION_ACCESS }
-    try {
-      return normalizeCollectionAccess(JSON.parse(await fs.readFile(this.getCollectionAccessFile(collectionName), 'utf8')))
-    } catch (error: any) {
-      if (error?.code !== 'ENOENT') {
-        try {
-          this.ctx.logger('memesluna').warn(`Failed to read access policy for collection "${collectionName}": ${error?.message || error}`)
-        } catch {
-          // 单元测试等无 logger 上下文时忽略
-        }
-      }
-      return { ...DEFAULT_COLLECTION_ACCESS }
-    }
-  }
-
-  async setCollectionAccess(collectionName: string, access: CollectionAccess): Promise<boolean> {
-    this.ensureCollectionName(collectionName)
-    if (!(await this.collectionExists(collectionName))) return false
-    if (!access || typeof access !== 'object' || !isCollectionAccessMode(access.mode)) {
-      throw new Error('Invalid collection access mode. Expected disabled, whitelist, or blacklist.')
-    }
-    const normalized = normalizeCollectionAccess(access)
-    const target = this.getCollectionAccessFile(collectionName)
-    const dir = path.dirname(target)
-    const temp = path.join(dir, `.access.json.${process.pid}.${Date.now()}.tmp`)
-    try {
-      await fs.writeFile(temp, JSON.stringify(normalized, null, 2), 'utf8')
-      await fs.rename(temp, target)
-    } catch (error) {
-      try {
-        await fs.unlink(temp)
-      } catch {
-        // 尽力删除临时文件，忽略清理失败
-      }
-      throw error
-    }
-    return true
   }
 
   async getCollectionDescription(collectionName: string): Promise<string> {
@@ -1075,14 +1002,7 @@ export class MemesLunaService extends Service {
   }
 
   private getMimeByFilename(filename: string): string {
-    const ext = path.extname(filename).toLowerCase()
-    if (ext === '.png') return 'image/png'
-    if (ext === '.gif') return 'image/gif'
-    if (ext === '.webp') return 'image/webp'
-    if (ext === '.bmp') return 'image/bmp'
-    if (ext === '.svg') return 'image/svg+xml'
-    if (ext === '.tif' || ext === '.tiff') return 'image/tiff'
-    return 'image/jpeg'
+    return mimeFromFilename(filename)
   }
 
   private mapStagedImage(row: MemesLunaStagedImageRow): StagedImageInfo {
@@ -1644,7 +1564,6 @@ export class MemesLunaService extends Service {
     const localImages = await this.getCollectionImages(collectionName)
     const links = await this.getCollectionLinks(collectionName)
     const description = await this.getCollectionDescription(collectionName)
-    const access = await this.getCollectionAccess(collectionName)
     const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName }, ['created_at'])
     const dates = rows
       .map((row) => new Date(row.created_at as Date))
@@ -1674,7 +1593,6 @@ export class MemesLunaService extends Service {
       createdAt,
       updatedAt,
       cover: localImages[0],
-      access,
     }
   }
 

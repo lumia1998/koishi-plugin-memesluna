@@ -116,7 +116,6 @@ injectVariablesPrompt: |
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `autoCollect` | boolean | `false` | 启用高频图片自动暂存 |
-| `whitelistGroups` | string[] | `[]` | 监听的群列表（空=全部） |
 | `emojiFrequencyWindowMinutes` | number | `10` | 统计时间窗口（分钟） |
 | `emojiFrequencyThreshold` | number | `3` | 触发暂存所需出现次数 |
 | `minEmojiSize` | number | `50` | 最小图片大小（KB） |
@@ -128,9 +127,6 @@ injectVariablesPrompt: |
 plugins:
   memesluna:
     autoCollect: true
-    whitelistGroups:
-      - '123456789'  # 只监听这个群
-      - '987654321'
     emojiFrequencyThreshold: 5  # 5次才收集
 ```
 

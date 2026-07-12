@@ -31,7 +31,6 @@ export interface Config {
   variableRefreshIntervalMs: number
   injectVariablesPrompt: string
   autoCollect: boolean
-  whitelistGroups: string[]
   emojiFrequencyWindowMinutes: number
   emojiFrequencyThreshold: number
   minEmojiSize: number
@@ -87,10 +86,6 @@ export const Config: Schema<Config> = Schema.intersect([
     autoCollect: Schema.boolean()
       .default(false)
       .description('开启后自动监听群聊消息，高频出现的图片会自动进入暂缓区等待审核'),
-    whitelistGroups: Schema.array(Schema.string())
-      .role('table')
-      .default([])
-      .description('自动暂存白名单群号，留空表示监听所有群；填写后只有这些群的图片会被统计'),
     emojiFrequencyWindowMinutes: Schema.number()
       .min(1)
       .max(1440)

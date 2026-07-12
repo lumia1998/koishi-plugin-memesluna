@@ -1,23 +1,5 @@
 import { describe, it, expect } from 'vitest'
-
-// 从 index.ts 导出的 isPrivateIP 函数（需要导出）
-function isPrivateIP(hostname: string): boolean {
-  // IPv4 私有地址检测
-  if (/^127\./.test(hostname)) return true
-  if (/^10\./.test(hostname)) return true
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true
-  if (/^192\.168\./.test(hostname)) return true
-  if (/^169\.254\./.test(hostname)) return true
-  if (hostname === 'localhost') return true
-
-  // IPv6 私有地址检测
-  if (/^::1$/.test(hostname)) return true
-  if (/^fe80:/i.test(hostname)) return true
-  if (/^fc00:/i.test(hostname)) return true
-  if (/^fd00:/i.test(hostname)) return true
-
-  return false
-}
+import { isPrivateIP } from '../src/download'
 
 describe('isPrivateIP', () => {
   it('应该识别 IPv4 回环地址', () => {

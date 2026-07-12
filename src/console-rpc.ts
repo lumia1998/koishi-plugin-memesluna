@@ -21,13 +21,6 @@ export interface ConsoleEndpointInput {
   method?: 'redirect'
 }
 
-export type ConsoleCollectionAccessMode = 'disabled' | 'whitelist' | 'blacklist'
-
-export interface ConsoleCollectionAccess {
-  mode: ConsoleCollectionAccessMode
-  groups: string[]
-}
-
 export interface ConsoleCollectionInfo {
   name: string
   description: string
@@ -39,8 +32,6 @@ export interface ConsoleCollectionInfo {
   updatedAt?: ConsoleDate
   apiCallCount?: number
   cover?: string
-  /** 合集访问策略：不限制 / 白名单 / 黑名单 */
-  access: ConsoleCollectionAccess
 }
 
 export interface ConsoleStagedImageInfo {
@@ -102,8 +93,6 @@ export interface MemesLunaConsoleEvents {
   'memesluna/createCollection'(name: string): Promise<boolean>
   'memesluna/deleteCollection'(name: string): Promise<boolean>
   'memesluna/setCollectionDescription'(name: string, description: string): Promise<boolean>
-  'memesluna/getCollectionAccess'(name: string): Promise<ConsoleCollectionAccess>
-  'memesluna/setCollectionAccess'(name: string, access: ConsoleCollectionAccess): Promise<boolean>
   'memesluna/deleteLocalImage'(collectionName: string, filename: string): Promise<boolean>
   'memesluna/moveLocalImage'(sourceCollection: string, targetCollection: string, filename: string): Promise<string | null>
   'memesluna/addLinks'(collectionName: string, linksText: string): Promise<number>

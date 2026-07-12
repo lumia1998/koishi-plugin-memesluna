@@ -110,44 +110,6 @@
                   </div>
                 </div>
 
-                <div class="asset-access-card">
-                  <div class="asset-card-label">访问限制</div>
-                  <div class="asset-access-mode-row">
-                    <label class="asset-access-mode-option">
-                      <input v-model="accessForm.mode" type="radio" value="disabled" />
-                      不限制
-                    </label>
-                    <label class="asset-access-mode-option">
-                      <input v-model="accessForm.mode" type="radio" value="whitelist" />
-                      白名单
-                    </label>
-                    <label class="asset-access-mode-option">
-                      <input v-model="accessForm.mode" type="radio" value="blacklist" />
-                      黑名单
-                    </label>
-                    <span class="asset-access-current">当前：{{ currentCollectionAccessLabel }}</span>
-                  </div>
-                  <textarea
-                    v-model="accessForm.groupsText"
-                    class="asset-link-textarea asset-access-groups"
-                    rows="4"
-                    :disabled="accessForm.mode === 'disabled'"
-                    placeholder="每行一个群号&#10;例如：&#10;123456789&#10;987654321"
-                  ></textarea>
-                  <div class="asset-access-actions">
-                    <div class="asset-api-hint">
-                      私聊始终允许。白名单仅列出的群可用；黑名单排除列出的群。
-                    </div>
-                    <button
-                      class="asset-btn primary"
-                      :disabled="accessSaving"
-                      @click="saveCollectionAccess"
-                    >
-                      {{ accessSaving ? '保存中…' : '保存访问策略' }}
-                    </button>
-                  </div>
-                </div>
-
               </section>
 
             <!-- Drag over drop zone area -->

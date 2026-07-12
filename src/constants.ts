@@ -11,6 +11,11 @@
 export const SEARCH_SCORE_THRESHOLD = 6
 
 /**
+ * 超过此数量时启用倒排索引候选过滤（正确性保持：bigram + 全文 token）
+ */
+export const SEARCH_INVERTED_INDEX_THRESHOLD = 500
+
+/**
  * 搜索评分规则
  */
 export const SEARCH_SCORING = {
@@ -105,6 +110,11 @@ export const AI_IMAGE_TARGET_SIZE = 512
 export const AI_IMAGE_JPEG_QUALITY = 75
 
 // ==================== 感知哈希相关 ====================
+
+/**
+ * 指纹回填并发数
+ */
+export const BACKFILL_CONCURRENCY = 4
 
 /**
  * 差分哈希位数

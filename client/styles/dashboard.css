@@ -706,56 +706,6 @@ body.dark .memesluna-app-layout {
   width: 100%;
   box-shadow: none;
 }
-.asset-access-card {
-  grid-column: 1 / -1;
-  min-width: 0;
-  width: 100%;
-  padding-top: 4px;
-  border-top: 1px solid var(--k-color-border, rgba(15, 23, 42, 0.08));
-}
-.asset-access-mode-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 14px;
-  margin-bottom: 10px;
-}
-.asset-access-mode-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--k-text-normal, #111827);
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  user-select: none;
-}
-.asset-access-mode-option input {
-  margin: 0;
-  accent-color: var(--k-color-primary, #2563eb);
-}
-.asset-access-current {
-  margin-left: auto;
-  color: var(--k-text-muted, rgba(55, 53, 47, 0.56));
-  font-size: 0.74rem;
-  font-weight: 650;
-}
-.asset-access-groups {
-  min-height: 88px;
-  color: var(--memesluna-text, #111827);
-}
-.asset-access-groups:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-.asset-access-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 10px;
-  flex-wrap: wrap;
-}
 .asset-card-label {
   color: var(--k-text-normal, #111827);
   font-size: 0.8rem;
@@ -2834,10 +2784,6 @@ body.dark .memesluna-app-layout {
   background-color: var(--memesluna-bg-card, #ffffff);
   color: var(--memesluna-primary, #2383e2);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
-}
-/* Access policy readability helpers */
-.asset-access-groups {
-  color: var(--memesluna-text, #111827);
 }
 .section-desc {
   color: var(--memesluna-text-muted, rgba(55, 53, 47, 0.55));
