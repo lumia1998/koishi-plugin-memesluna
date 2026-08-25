@@ -132,7 +132,10 @@ export function registerCommands(ctx: Context, config: Config) {
 
       const images = await ctx.database.get('memesluna_images', {})
       const force = !!options?.force
-      const targets = images.filter((img) => {
+      // 批量 AI 标注只处理实际保存在本地合集目录中的图片。
+      // 外链图片仍可用于路由分发，但不应计入 tagall 的处理数量。
+      const localImages = images.filter((img) => img.type === 'local')
+      const targets = localImages.filter((img) => {
         if (force) return true
         let tags: string[] = []
         try { const p = JSON.parse(img.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
@@ -140,7 +143,9 @@ export function registerCommands(ctx: Context, config: Config) {
       })
 
       if (targets.length === 0) {
-        return '没有发现需要标注的图片。'
+        return localImages.length > 0
+          ? '没有发现需要标注的本地图片。'
+          : '没有发现需要标注的本地图片（外链图片不会参与批量 AI 标注）。'
       }
 
       if (session) {
