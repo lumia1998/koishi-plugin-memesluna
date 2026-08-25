@@ -135,6 +135,14 @@ export function registerCommands(ctx: Context, config: Config) {
       // 批量 AI 标注只处理实际保存在本地合集目录中的图片。
       // 外链图片仍可用于路由分发，但不应计入 tagall 的处理数量。
       const localImages = images.filter((img) => img.type === 'local')
+      const taggedLocalCount = localImages.filter((img) => {
+        try {
+          const tags = JSON.parse(img.tags || '[]')
+          return Array.isArray(tags) && tags.length > 0
+        } catch {
+          return false
+        }
+      }).length
       const targets = localImages.filter((img) => {
         if (force) return true
         let tags: string[] = []
@@ -144,7 +152,7 @@ export function registerCommands(ctx: Context, config: Config) {
 
       if (targets.length === 0) {
         return localImages.length > 0
-          ? '没有发现需要标注的本地图片。'
+          ? `本地图片共 ${localImages.length} 张，已完成标注 ${taggedLocalCount} 张，没有发现需要标注的本地图片。`
           : '没有发现需要标注的本地图片（外链图片不会参与批量 AI 标注）。'
       }
 
