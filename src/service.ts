@@ -484,6 +484,23 @@ export class MemesLunaService extends Service {
           } catch {}
         }
 
+        // Repair legacy rows when the physical file already exists locally.
+        // Older records may have an empty/storage type, so merely restarting
+        // must not leave them excluded from local-only operations such as tagall.
+        const existing = existingImages.find((img) => img.filename === currentName)
+        if (existing) {
+          if (existing.type !== 'external' && (existing.type !== 'local' || existing.value !== currentName)) {
+            try {
+              await this.ctx.database.set('memesluna_images', { id: existing.id }, {
+                type: 'local',
+                value: currentName,
+                mime: this.getMimeByFilename(currentName),
+              })
+            } catch {}
+          }
+          continue
+        }
+
         // Check if already registered
         if (!existingFilenames.has(currentName)) {
           const index = ++maxIndex
