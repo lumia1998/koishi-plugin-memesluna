@@ -12,7 +12,12 @@ import {
 } from './constants'
 import { sanitizeFilename } from './filename'
 import { mimeFromFilename } from './image-format'
-import { sleep } from './utils'
+import { parseJsonStringArray, normalizeMetadataList } from './utils'
+import { withStorageLock, removeWithRollback, unusedFilename } from './storage'
+import { groupSimilarImages } from './similarity'
+import { AnnotationQueue } from './annotation-queue'
+import { MAX_IMAGE_BYTES, MAX_METADATA_ALIASES, MAX_METADATA_TAGS, MAX_METADATA_ITEM_LENGTH } from './constants'
+import type { ImageMetadataPayload, ImageMetadataResult, CollectionPageQuery, CollectionResourcePage } from './console-rpc'
 
 /** 有限并发池，按顺序领取任务执行 */
 async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>) {
@@ -24,7 +29,9 @@ async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Prom
       await fn(item)
     }
   })
-  await Promise.all(workers)
+  const results = await Promise.allSettled(workers)
+  const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+  if (failure) throw failure.reason
 }
 
 export const MEMESLUNA_IMAGES_UPDATED = 'memesluna/images-updated'
@@ -72,16 +79,6 @@ export function loadPhoton(): any | null {
     cachedPhoton = null
   }
   return cachedPhoton
-}
-
-function countHexBitDistance(a: string, b: string): number {
-  if (!a || !b || a.length !== b.length) return DHASH_BITS
-  let distance = 0
-  for (let i = 0; i < a.length; i++) {
-    const diff = Number.parseInt(a[i], 16) ^ Number.parseInt(b[i], 16)
-    distance += diff.toString(2).replace(/0/g, '').length
-  }
-  return distance
 }
 
 function lumaFromRgba(data: Buffer | Uint8Array, offset: number): number {
@@ -229,22 +226,29 @@ interface MemesLunaStagedImageRow {
 export class MemesLunaService extends Service {
   private _readyPromise: Promise<void>
   private _readyResolve: () => void
+  private _readyReject: (error: unknown) => void
   private _annotator: AIAnnotator | null = null
-  /** 进程内标注任务串行链，避免 stole / tagall 并行开多套 worker */
-  private _annotationChain: Promise<void> = Promise.resolve()
+  private _disposed = false
+  /** 批量和手动标注共享生命周期及进度统计。 */
+  private _annotationQueue = new AnnotationQueue()
 
   constructor(ctx: Context, public config: Config) {
     super(ctx, 'memesluna', true)
     this.defineDatabase()
 
-    this._readyPromise = new Promise((resolve) => {
+    this._readyPromise = new Promise((resolve, reject) => {
       this._readyResolve = resolve
+      this._readyReject = reject
     })
+    void this._readyPromise.catch(() => {})
 
     ctx.on('ready', async () => {
-      await this.ensureStorage()
-      this._readyResolve()
+      try {
+        await withStorageLock(this.getStorageRoot(), () => this.ensureStorage())
+        this._readyResolve()
+      } catch (error) { this._readyReject(error); throw error }
     })
+    ctx.on('dispose', () => { this._disposed = true; this._annotationQueue.dispose(); this._annotator?.dispose() })
   }
 
   static inject = ['database']
@@ -258,6 +262,7 @@ export class MemesLunaService extends Service {
   }
 
   setAnnotator(annotator: AIAnnotator): void {
+    if (this._disposed) { annotator.dispose(); return }
     this._annotator = annotator
   }
 
@@ -265,87 +270,38 @@ export class MemesLunaService extends Service {
     return this._annotator
   }
 
-  /**
-   * 将已存在于数据库的图片行推入 AI 标注队列。
-   * 并发调用通过 `_annotationChain` 串行化批次，避免 stole / tagall 并行开多套 worker。
-   * @param rows 图片数据库行
-   * @param options.force 为 true 时跳过“已有标签/别名则跳过”的检查
-   * @param options.onProgress 每处理完一张（成功或失败）后回调
-   */
-  async queueAnnotation(
-    rows: any[],
-    options?: {
-      force?: boolean
-      onProgress?: (success: number, fail: number) => void | Promise<void>
-    }
-  ): Promise<{ success: number; fail: number }> {
-    if (!this._annotator || !rows.length) return { success: 0, fail: 0 }
+  getAnnotationStatus() {
+    return { ...this._annotationQueue.stats, requests: this._annotator?.taskStats, usage: this._annotator?.getUsageStats() }
+  }
 
-    const run = async (): Promise<{ success: number; fail: number }> => {
-      if (!this._annotator) return { success: 0, fail: 0 }
-      const concurrency = this.config.aiConcurrency || 2
-      const queue = [...rows]
-      const force = !!options?.force
-      let success = 0
-      let fail = 0
+  cancelAnnotations() {
+    this._annotationQueue.cancel()
+    this._annotator?.cancelPending()
+    return true
+  }
 
-      const worker = async () => {
-        while (queue.length > 0) {
-          const row = queue.shift()
-          if (!row) break
-          try {
-            if (row.type && row.type !== 'local') {
-              continue
-            }
-
-            if (!force) {
-              const stored = row.id ? await this.getImageById(row.id) : null
-              if (stored) {
-                let aliases: string[] = []
-                let tags: string[] = []
-                try { const p = JSON.parse(stored.aliases || '[]'); aliases = Array.isArray(p) ? p : [] } catch {}
-                try { const p = JSON.parse(stored.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
-                if (aliases.length > 0 || tags.length > 0) continue
-              }
-            }
-
-            const image = await this.getLocalImageBuffer(row.collection, row.filename)
-            if (!image) {
-              fail++
-              if (options?.onProgress) await options.onProgress(success, fail)
-              continue
-            }
-            const result = await this._annotator!.annotate(image.buffer, {
-              filename: row.filename,
-              collectionName: row.collection,
-              imageUrl: `${this.config.backendPath}/${encodeURIComponent(row.collection)}/${encodeURIComponent(row.filename)}`,
-            })
-            if (result) {
-              await this.updateImageAnnotation(row.id, result.aliases, result.tags)
-              success++
-            } else {
-              fail++
-            }
-            if (options?.onProgress) await options.onProgress(success, fail)
-            if (queue.length > 0 && this.config.aiBatchDelay > 0) {
-              await sleep(this.config.aiBatchDelay)
-            }
-          } catch (err) {
-            fail++
-            if (options?.onProgress) await options.onProgress(success, fail)
-            this.ctx.logger('memesluna').warn(`queueAnnotation failed for ${row.filename}:`, err)
-          }
-        }
-      }
-
-      const workers = Array(Math.min(concurrency, rows.length)).fill(null).map(() => worker())
-      await Promise.all(workers)
-      return { success, fail }
-    }
-
-    const resultPromise = this._annotationChain.then(run, run)
-    this._annotationChain = resultPromise.then(() => undefined, () => undefined)
-    return resultPromise
+  async queueAnnotation(rows: any[], options?: {
+    force?: boolean
+    onProgress?: (success: number, fail: number) => void | Promise<void>
+  }): Promise<{ success: number; fail: number; skipped: number; cancelled: number }> {
+    if (!this._annotator || !rows.length) return { success: 0, fail: 0, skipped: 0, cancelled: 0 }
+    return this._annotationQueue.enqueue(rows, this.config.aiConcurrency || 2, async (row, signal) => {
+      // 排队期间图片可能已移动/删除；始终读取当前记录。
+      const stored = row.id ? await this.getImageById(row.id) : null
+      if (!stored || stored.type !== 'local') return 'skipped'
+      if (!options?.force && (parseJsonStringArray(stored.aliases).length || parseJsonStringArray(stored.tags).length)) return 'skipped'
+      if (signal.aborted) return 'cancelled'
+      const image = await this.getLocalImageBuffer(stored.collection, stored.filename)
+      if (!image) return 'fail'
+      if (signal.aborted) return 'cancelled'
+      const result = await this._annotator!.annotate(image.buffer, {
+        filename: stored.filename, collectionName: stored.collection,
+        imageUrl: `${this.config.backendPath}/${encodeURIComponent(stored.collection)}/${encodeURIComponent(stored.filename)}`,
+      })
+      if (signal.aborted) return 'cancelled'
+      if (!result) return 'fail'
+      return await this.updateImageAnnotation(stored.id, result.aliases, result.tags) ? 'success' : 'skipped'
+    }, this.config.aiBatchDelay || 0, options?.onProgress, (error) => this.ctx.logger('memesluna').warn('Annotation task failed:', error))
   }
 
 
@@ -450,7 +406,7 @@ export class MemesLunaService extends Service {
       this.ctx.logger('memesluna').warn('Failed to cleanup missing collections from database:', err)
     }
 
-    await Promise.all(folders.map(async (colName) => {
+    await mapPool(folders, BACKFILL_CONCURRENCY, async (colName) => {
       const colDir = this.getCollectionDir(colName)
       let files: string[] = []
       try {
@@ -470,19 +426,27 @@ export class MemesLunaService extends Service {
       let maxIndex = existingImages.reduce((max, img) => Math.max(max, img.index), 0)
 
       // Sync local files
+      const physicalFilenames = new Set<string>()
       for (const filename of files) {
         const safeName = sanitizeFilename(filename)
         let currentName = filename
 
-        // Rename on disk if the name was not safe
+        // 初始化重命名也必须避免覆盖已经存在的文件，并保留原记录标注。
+        const legacy = existingImages.find((img) => img.type !== 'external' && img.filename === filename)
         if (safeName !== filename) {
+          const availableName = await unusedFilename(colDir, safeName, async (candidate) => existingFilenames.has(candidate))
           const oldPath = path.join(colDir, filename)
-          const newPath = path.join(colDir, safeName)
+          const newPath = path.join(colDir, availableName)
+          await fs.copyFile(oldPath, newPath, (await import('fs')).constants.COPYFILE_EXCL)
           try {
-            await fs.rename(oldPath, newPath)
-            currentName = safeName
-          } catch {}
+            await removeWithRollback(root, oldPath, async () => {
+              if (legacy) await this.ctx.database.set('memesluna_images', { id: legacy.id }, { filename: availableName, value: availableName, type: 'local' })
+            })
+          } catch (error) { await fs.unlink(newPath); throw error }
+          currentName = availableName
+          if (legacy) { existingFilenames.delete(filename); Object.assign(legacy, { filename: currentName, value: currentName, type: 'local' }); existingFilenames.add(currentName) }
         }
+        physicalFilenames.add(currentName)
 
         // Repair legacy rows when the physical file already exists locally.
         // Older records may have an empty/storage type, so merely restarting
@@ -523,7 +487,7 @@ export class MemesLunaService extends Service {
       }
 
       // Cleanup deleted local files from database
-      const filesSet = new Set(files.map(sanitizeFilename))
+      const filesSet = physicalFilenames
       const missingLocalImages = existingImages.filter(
         (img) => img.type === 'local' && !filesSet.has(img.value || img.filename)
       )
@@ -564,7 +528,7 @@ export class MemesLunaService extends Service {
         // Cleanup migrated links file so we don't scan it repeatedly
         await fs.rm(linksFile, { force: true })
       } catch {}
-    }))
+    })
   }
 
   private async ensureStorage() {
@@ -728,7 +692,8 @@ export class MemesLunaService extends Service {
           const fullPath = this.resolveStagedImagePath(staged.filename)
           await fs.access(fullPath)
           return `暂缓区/${staged.original_name || staged.filename}`
-        } catch {
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
           await this.ctx.database.remove('memesluna_staged_images', { id: staged.id })
         }
       }
@@ -746,7 +711,8 @@ export class MemesLunaService extends Service {
             const fullPath = this.resolveLocalImagePath(image.collection, image.value)
             await fs.access(fullPath)
             return `${image.collection}/${image.filename}`
-          } catch {
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
             await this.ctx.database.remove('memesluna_images', { id: image.id })
             this.notifyImagesChanged()
           }
@@ -768,7 +734,8 @@ export class MemesLunaService extends Service {
         try {
           await fs.access(this.resolveLocalImagePath(row.collection, row.value || row.filename))
           return row
-        } catch {
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
           await this.ctx.database.remove('memesluna_images', { id: row.id })
           this.notifyImagesChanged()
         }
@@ -778,11 +745,6 @@ export class MemesLunaService extends Service {
     }
 
     return null
-  }
-
-  private getHashSimilarity(a: string, b: string): number {
-    if (!a || !b || a.length !== b.length) return 0
-    return 1 - countHexBitDistance(a, b) / DHASH_BITS
   }
 
   async getSimilarStagedImages(threshold = this.config.similarityThreshold || 0.9): Promise<SimilarStagedImagesResult> {
@@ -802,73 +764,10 @@ export class MemesLunaService extends Service {
       }
     }
 
-    const parent = new Map<string, string>()
-    const groupSimilarity = new Map<string, number>()
-    const find = (id: string): string => {
-      const current = parent.get(id) || id
-      if (current === id) return id
-      const root = find(current)
-      parent.set(id, root)
-      return root
-    }
-    const union = (a: string, b: string, similarity: number) => {
-      const rootA = find(a)
-      const rootB = find(b)
-      if (rootA === rootB) {
-        groupSimilarity.set(rootA, Math.max(groupSimilarity.get(rootA) || 0, similarity))
-        return
-      }
-      parent.set(rootB, rootA)
-      groupSimilarity.set(rootA, Math.max(groupSimilarity.get(rootA) || 0, groupSimilarity.get(rootB) || 0, similarity))
-    }
-
-    for (const item of items) parent.set(item.id, item.id)
-
-    const linkIfSimilar = (i: number, j: number) => {
-      const similarity = this.getHashSimilarity(items[i].perceptualHash, items[j].perceptualHash)
-      if (similarity >= normalizedThreshold) {
-        union(items[i].id, items[j].id, similarity)
-      }
-    }
-
-    // 小规模全量两两比较；大规模用感知哈希前 3 位 hex 分桶，桶内两两比较（性能优先，极少数跨桶近邻可能漏检）
-    if (items.length <= 200) {
-      for (let i = 0; i < items.length; i++) {
-        for (let j = i + 1; j < items.length; j++) {
-          linkIfSimilar(i, j)
-        }
-      }
-    } else {
-      const buckets = new Map<string, number[]>()
-      for (let i = 0; i < items.length; i++) {
-        const key = (items[i].perceptualHash || '').slice(0, 3)
-        const list = buckets.get(key)
-        if (list) list.push(i)
-        else buckets.set(key, [i])
-      }
-      for (const indices of buckets.values()) {
-        for (let a = 0; a < indices.length; a++) {
-          for (let b = a + 1; b < indices.length; b++) {
-            linkIfSimilar(indices[a], indices[b])
-          }
-        }
-      }
-    }
-
-    const grouped = new Map<string, StagedImageInfo[]>()
-    for (const item of items) {
-      const root = find(item.id)
-      const list = grouped.get(root) || []
-      list.push(item)
-      grouped.set(root, list)
-    }
-
-    const groups = Array.from(grouped.entries())
-      .filter(([, list]) => list.length > 1)
-      .map(([root, list], index) => ({
-        id: `similar-${index + 1}`,
-        items: list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
-        similarity: groupSimilarity.get(root) || normalizedThreshold,
+    const groups = groupSimilarImages(items, normalizedThreshold)
+      .map((group) => ({
+        id: `similar-${group.items[0].id}`,
+        ...group,
       }))
       .sort((a, b) => b.items.length - a.items.length || b.similarity - a.similarity)
 
@@ -922,11 +821,16 @@ export class MemesLunaService extends Service {
   }
 
   async setCollectionDescription(collectionName: string, description: string): Promise<boolean> {
+    return withStorageLock(this.getStorageRoot(), () => this.setCollectionDescriptionUnlocked(collectionName, description))
+  }
+
+  private async setCollectionDescriptionUnlocked(collectionName: string, description: string): Promise<boolean> {
     this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       return false
     }
     await fs.writeFile(this.getCollectionDescriptionFile(collectionName), description.trim(), 'utf8')
+    this.notifyImagesChanged()
     return true
   }
 
@@ -957,6 +861,10 @@ export class MemesLunaService extends Service {
   }
 
   async createCollection(collectionName: string): Promise<boolean> {
+    return withStorageLock(this.getStorageRoot(), () => this.createCollectionUnlocked(collectionName))
+  }
+
+  private async createCollectionUnlocked(collectionName: string): Promise<boolean> {
     this.ensureCollectionName(collectionName)
     if (await this.getEndpointByName(collectionName)) {
       throw new Error(`Collection name conflicts with existing endpoint: ${collectionName}`)
@@ -975,11 +883,15 @@ export class MemesLunaService extends Service {
   }
 
   async deleteCollection(collectionName: string): Promise<boolean> {
+    return withStorageLock(this.getStorageRoot(), () => this.deleteCollectionUnlocked(collectionName))
+  }
+
+  private async deleteCollectionUnlocked(collectionName: string): Promise<boolean> {
     this.ensureCollectionName(collectionName)
     const dir = this.getCollectionDir(collectionName)
     try {
-      await fs.rm(dir, { recursive: true, force: true })
-      await this.ctx.database.remove('memesluna_images', { collection: collectionName })
+      if (!(await this.collectionExists(collectionName))) return false
+      await removeWithRollback(this.getStorageRoot(), dir, () => this.ctx.database.remove('memesluna_images', { collection: collectionName }))
       this.notifyImagesChanged()
       return true
     } catch {
@@ -1109,6 +1021,10 @@ export class MemesLunaService extends Service {
   }
 
   async addLinksToCollection(collectionName: string, links: string[]): Promise<number> {
+    return withStorageLock(this.getStorageRoot(), () => this.addLinksToCollectionUnlocked(collectionName, links))
+  }
+
+  private async addLinksToCollectionUnlocked(collectionName: string, links: string[]): Promise<number> {
     this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       throw new Error(`Collection not found: ${collectionName}`)
@@ -1153,6 +1069,10 @@ export class MemesLunaService extends Service {
   }
 
   async removeLinkFromCollection(collectionName: string, link: string): Promise<boolean> {
+    return withStorageLock(this.getStorageRoot(), () => this.removeLinkFromCollectionUnlocked(collectionName, link))
+  }
+
+  private async removeLinkFromCollectionUnlocked(collectionName: string, link: string): Promise<boolean> {
     this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       return false
@@ -1216,69 +1136,42 @@ export class MemesLunaService extends Service {
     return path.join(this.getStagingDir(), this.ensureSafeStagedImageFilename(filename))
   }
 
-  private async deduplicateFilename(collectionDir: string, filename: string): Promise<string> {
-    const parsed = path.parse(filename)
-    let counter = 1
-    let candidate = filename
-
-    while (true) {
-      try {
-        await fs.access(path.join(collectionDir, candidate))
-        candidate = `${parsed.name}_${counter}${parsed.ext}`
-        counter++
-      } catch {
-        return candidate
-      }
-    }
-  }
-
   private async deduplicateDatabaseFilename(collectionName: string, filename: string): Promise<string> {
-    const parsed = path.parse(filename)
-    let counter = 1
-    let candidate = filename
-
-    while (true) {
+    return unusedFilename(this.getCollectionDir(collectionName), filename, async (candidate) => {
       const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName, filename: candidate })
-      if (!rows.length) {
-        return candidate
-      }
-      candidate = `${parsed.name}_${counter}${parsed.ext}`
-      counter++
-    }
+      return rows.length > 0
+    })
   }
 
-  async addLocalImageBuffer(
+
+  async addLocalImageBuffer(collectionName: string, buffer: Buffer, originalName?: string, extHint?: string): Promise<{ id: string; filename: string; created?: boolean }> {
+    return withStorageLock(this.getStorageRoot(), () => this.addLocalImageBufferUnlocked(collectionName, buffer, originalName, extHint))
+  }
+
+  private async addLocalImageBufferUnlocked(
     collectionName: string,
     buffer: Buffer,
     originalName?: string,
     extHint?: string
-  ): Promise<{ id: string; filename: string }> {
+  ): Promise<{ id: string; filename: string; created?: boolean }> {
     this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       throw new Error(`Collection not found: ${collectionName}`)
     }
 
-    if (!buffer.length) {
-      throw new Error('Invalid image payload')
+    if (!buffer.length || buffer.length > MAX_IMAGE_BYTES) {
+      throw new Error('Invalid image payload: maximum size is 50MB')
     }
-
-    const fingerprints = await this.getImageFingerprints(buffer)
-    const duplicate = await this.getExistingImageRowByHash(fingerprints.hash, collectionName)
-    const preservedAliases = duplicate?.aliases || '[]'
-    const preservedTags = duplicate?.tags || '[]'
-    if (duplicate) {
-      await this.deleteImageFromCollection(duplicate.collection, duplicate.filename)
-    }
-
-    // Determine the next index
-    const maxImg = await this.ctx.database.get('memesluna_images', { collection: collectionName }, { limit: 1, sort: { index: 'desc' } })
-    const index = maxImg.length ? maxImg[0].index + 1 : 1
 
     const rawExt = (path.parse(originalName ?? '').ext || (extHint ? `.${extHint}` : '') || '.png').toLowerCase()
     const finalExt = rawExt === '.jpeg' ? '.jpg' : rawExt
-    if (!IMAGE_EXTENSIONS.has(finalExt)) {
-      throw new Error('Unsupported image format')
-    }
+    if (!IMAGE_EXTENSIONS.has(finalExt)) throw new Error('Unsupported image format')
+
+    const fingerprints = await this.getImageFingerprints(buffer)
+    const duplicate = await this.getExistingImageRowByHash(fingerprints.hash, collectionName)
+    if (duplicate) return { id: duplicate.id, filename: duplicate.filename, created: false }
+    const maxImg = await this.ctx.database.get('memesluna_images', { collection: collectionName }, { limit: 1, sort: { index: 'desc' } })
+    const index = maxImg.length ? maxImg[0].index + 1 : 1
 
     const baseName = originalName ? path.basename(originalName, path.extname(originalName)) : `image-${Date.now()}`
     const safeBase = sanitizeFilename(`${baseName}${finalExt}`)
@@ -1287,8 +1180,10 @@ export class MemesLunaService extends Service {
     const id = randomUUID()
     // Local upload
     const dir = this.getCollectionDir(collectionName)
-    await fs.writeFile(path.join(dir, finalName), buffer)
-    await this.ctx.database.create('memesluna_images', {
+    const destination = path.join(dir, finalName)
+    await fs.writeFile(destination, buffer, { flag: 'wx' })
+    try {
+      await this.ctx.database.create('memesluna_images', {
       id,
       collection: collectionName,
       index,
@@ -1297,16 +1192,76 @@ export class MemesLunaService extends Service {
       value: finalName,
       mime: this.getMimeByFilename(finalName),
       ...fingerprints,
-      aliases: preservedAliases,
-      tags: preservedTags,
+      aliases: '[]',
+      tags: '[]',
       created_at: new Date(),
     })
+    } catch (error) {
+      await fs.unlink(destination)
+      throw error
+    }
     this.notifyImagesChanged()
 
-    return { id, filename: finalName }
+    return { id, filename: finalName, created: true }
   }
 
 
+
+  async getCollectionResourcePage(collectionName: string, input: CollectionPageQuery = {}): Promise<CollectionResourcePage> {
+    this.ensureCollectionName(collectionName)
+    const limit = Math.max(1, Math.min(100, Math.floor(Number(input.limit) || 24)))
+    const offset = Math.max(0, Math.floor(Number(input.offset) || 0))
+    if (!Number.isFinite(offset)) throw new Error('Invalid page offset')
+    const query: any = { collection: collectionName }
+    if (input.type === 'local' || input.type === 'external') query.type = input.type
+    if (input.selected !== undefined) {
+      if (!Array.isArray(input.selected) || input.selected.length > 5000 || input.selected.some((item) => typeof item !== 'string')) throw new Error('Invalid selection')
+      if (!input.selected.length) return { items: [], total: 0, offset, limit }
+      query.type = 'local'
+      query.filename = input.selected
+    }
+    const search = typeof input.search === 'string' ? input.search.trim().slice(0, 200) : ''
+    if (search) {
+      const pattern = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      query.$or = [{ filename: { $regex: pattern } }, { value: { $regex: pattern } }]
+    }
+    const total = await this.ctx.database.eval('memesluna_images', (row) => Eval.count(row.id), query)
+    const rows = await this.ctx.database.get('memesluna_images', query, {
+      limit, offset, sort: { filename: input.sort === 'nameDesc' ? 'desc' : 'asc', id: 'asc' },
+    })
+    return {
+      total, offset, limit,
+      items: rows.map((row) => ({
+        id: row.id, type: row.type === 'external' ? 'external' : 'local', filename: row.filename,
+        value: row.type === 'external' ? row.value : row.filename,
+        tags: parseJsonStringArray(row.tags), aliases: parseJsonStringArray(row.aliases),
+      })),
+    }
+  }
+
+  async updateImageMetadata(payload: ImageMetadataPayload): Promise<ImageMetadataResult> {
+    return withStorageLock(this.getStorageRoot(), async () => {
+      const { collectionName, filename, mode = 'replace' } = payload
+      this.ensureCollectionName(collectionName)
+      if (!filename || !['replace', 'add'].includes(mode)) return { ok: false, error: '参数不完整' }
+      for (const list of [payload.aliases, payload.tags]) {
+        if (list !== undefined && (!Array.isArray(list) || list.some((item) => typeof item !== 'string'))) return { ok: false, error: '标注必须为字符串数组' }
+      }
+      const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName, filename })
+      if (!rows.length) return { ok: false, error: '图片不存在' }
+      const row = rows[0]
+      const merge = (existing: string, incoming: string[] | undefined, max: number) => normalizeMetadataList(
+        incoming === undefined ? parseJsonStringArray(existing)
+          : mode === 'add' ? [...parseJsonStringArray(existing), ...incoming] : incoming,
+        max, MAX_METADATA_ITEM_LENGTH,
+      )
+      const aliases = merge(row.aliases, payload.aliases, MAX_METADATA_ALIASES)
+      const tags = merge(row.tags, payload.tags, MAX_METADATA_TAGS)
+      await this.ctx.database.set('memesluna_images', { id: row.id }, { aliases: JSON.stringify(aliases), tags: JSON.stringify(tags) })
+      this.notifyImagesChanged()
+      return { ok: true, aliases, tags }
+    })
+  }
 
   async getImageById(id: string) {
     const rows = await this.ctx.database.get('memesluna_images', { id })
@@ -1314,6 +1269,10 @@ export class MemesLunaService extends Service {
   }
 
   async updateImageAnnotation(id: string, aliases?: string[], tags?: string[]): Promise<boolean> {
+    return withStorageLock(this.getStorageRoot(), () => this.updateImageAnnotationUnlocked(id, aliases, tags))
+  }
+
+  private async updateImageAnnotationUnlocked(id: string, aliases?: string[], tags?: string[]): Promise<boolean> {
     const row = await this.getImageById(id)
     if (!row) return false
     const update: any = {}
@@ -1325,14 +1284,18 @@ export class MemesLunaService extends Service {
   }
 
 
-  async addStagedImageBuffer(
+  async addStagedImageBuffer(buffer: Buffer, originalName?: string, source = 'filter', reason = ''): Promise<StagedImageInfo> {
+    return withStorageLock(this.getStorageRoot(), () => this.addStagedImageBufferUnlocked(buffer, originalName, source, reason))
+  }
+
+  private async addStagedImageBufferUnlocked(
     buffer: Buffer,
     originalName?: string,
     source = 'filter',
     reason = ''
   ): Promise<StagedImageInfo> {
-    if (!buffer.length) {
-      throw new Error('Invalid image payload')
+    if (!buffer.length || buffer.length > MAX_IMAGE_BYTES) {
+      throw new Error('Invalid image payload: maximum size is 50MB')
     }
 
     if (this.isAvifBuffer(buffer) || path.extname(originalName ?? '').toLowerCase() === '.avif') {
@@ -1352,7 +1315,7 @@ export class MemesLunaService extends Service {
     const now = new Date()
 
     await fs.mkdir(this.getStagingDir(), { recursive: true })
-    await fs.writeFile(targetPath, buffer)
+    await fs.writeFile(targetPath, buffer, { flag: 'wx' })
 
     const row = {
       id: randomUUID(),
@@ -1366,7 +1329,12 @@ export class MemesLunaService extends Service {
       created_at: now,
     }
 
-    await this.ctx.database.create('memesluna_staged_images', row)
+    try {
+      await this.ctx.database.create('memesluna_staged_images', row)
+    } catch (error) {
+      await fs.unlink(targetPath)
+      throw error
+    }
     return this.mapStagedImage(row)
   }
 
@@ -1377,6 +1345,7 @@ export class MemesLunaService extends Service {
     reason = ''
   ): Promise<StagedImageInfo> {
     const { base64, extHint } = this.normalizeBase64(base64Data)
+    if (base64.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4) throw new Error('Image exceeds 50MB limit')
     const buffer = Buffer.from(base64, 'base64')
     const name = originalName || (extHint ? `filtered.${extHint}` : undefined)
     return this.addStagedImageBuffer(buffer, name, source, reason)
@@ -1403,52 +1372,55 @@ export class MemesLunaService extends Service {
   }
 
   async deleteStagedImage(id: string): Promise<boolean> {
+    return withStorageLock(this.getStorageRoot(), () => this.deleteStagedImageUnlocked(id))
+  }
+
+  private async deleteStagedImageUnlocked(id: string): Promise<boolean> {
     const rows = await this.ctx.database.get('memesluna_staged_images', { id })
     if (!rows.length) return false
     const row = rows[0] as MemesLunaStagedImageRow
 
-    try {
-      await fs.unlink(this.resolveStagedImagePath(row.filename))
-    } catch {}
-
-    await this.ctx.database.remove('memesluna_staged_images', { id })
+    await removeWithRollback(this.getStorageRoot(), this.resolveStagedImagePath(row.filename),
+      () => this.ctx.database.remove('memesluna_staged_images', { id }))
     return true
   }
 
   async deleteExpiredStagedImages(retentionDays: number): Promise<number> {
+    return withStorageLock(this.getStorageRoot(), () => this.deleteExpiredStagedImagesUnlocked(retentionDays))
+  }
+
+  private async deleteExpiredStagedImagesUnlocked(retentionDays: number): Promise<number> {
     if (retentionDays <= 0) return 0
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000)
     const rows = await this.ctx.database.get('memesluna_staged_images', {})
     const expired = rows.filter((row) => new Date(row.created_at).getTime() < cutoff.getTime())
     if (!expired.length) return 0
 
-    for (const row of expired) {
-      try {
-        await fs.unlink(this.resolveStagedImagePath((row as MemesLunaStagedImageRow).filename))
-      } catch {}
-    }
-
-    const ids = expired.map((row) => row.id)
-    await this.ctx.database.remove('memesluna_staged_images', { id: ids })
-    return ids.length
+    let deleted = 0
+    for (const row of expired) if (await this.deleteStagedImageUnlocked(row.id)) deleted++
+    return deleted
   }
 
+
   async deleteAllStagedImages(): Promise<number> {
+    return withStorageLock(this.getStorageRoot(), () => this.deleteAllStagedImagesUnlocked())
+  }
+
+  private async deleteAllStagedImagesUnlocked(): Promise<number> {
     const rows = await this.ctx.database.get('memesluna_staged_images', {})
     if (!rows.length) return 0
 
-    for (const row of rows) {
-      try {
-        await fs.unlink(this.resolveStagedImagePath((row as MemesLunaStagedImageRow).filename))
-      } catch {}
-    }
-
-    const ids = rows.map((row) => row.id)
-    await this.ctx.database.remove('memesluna_staged_images', { id: ids })
-    return ids.length
+    let deleted = 0
+    for (const row of rows) if (await this.deleteStagedImageUnlocked(row.id)) deleted++
+    return deleted
   }
 
+
   async promoteStagedImage(id: string, collectionName: string): Promise<string | null> {
+    return withStorageLock(this.getStorageRoot(), () => this.promoteStagedImageUnlocked(id, collectionName))
+  }
+
+  private async promoteStagedImageUnlocked(id: string, collectionName: string): Promise<string | null> {
     this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       throw new Error(`Collection not found: ${collectionName}`)
@@ -1464,12 +1436,15 @@ export class MemesLunaService extends Service {
     let savedResult: any
     try {
       const originalName = this.isImageFile(row.original_name) ? row.original_name : row.filename
-      savedResult = await this.addLocalImageBuffer(collectionName, staged.buffer, originalName)
+      savedResult = await this.addLocalImageBufferUnlocked(collectionName, staged.buffer, originalName)
 
       // 只有在成功写入正式合集后才删除暂缓区图片
-      await this.deleteStagedImage(id)
+      await this.deleteStagedImageUnlocked(id)
     } catch (error) {
-      // 如果归档失败，暂缓区图片保持不变
+      if (savedResult?.created) {
+        await this.deleteImageFromCollectionUnlocked(collectionName, savedResult.filename)
+      }
+      // 撤销本次新建的正式图片，保留原暂缓区图片。
       this.ctx.logger('memesluna').error(`Failed to promote staged image ${id}:`, error)
       throw error
     }
@@ -1487,6 +1462,10 @@ export class MemesLunaService extends Service {
     return saved
   }
   async deleteImageFromCollection(collectionName: string, filename: string): Promise<boolean> {
+    return withStorageLock(this.getStorageRoot(), () => this.deleteImageFromCollectionUnlocked(collectionName, filename))
+  }
+
+  private async deleteImageFromCollectionUnlocked(collectionName: string, filename: string): Promise<boolean> {
     this.ensureCollectionName(collectionName)
     if (!(await this.collectionExists(collectionName))) {
       return false
@@ -1507,17 +1486,20 @@ export class MemesLunaService extends Service {
     const image = rows[0]
     if (image.type === 'local') {
       const fullPath = path.join(this.getCollectionDir(collectionName), safeName)
-      try {
-        await fs.unlink(fullPath)
-      } catch {}
+      await removeWithRollback(this.getStorageRoot(), fullPath,
+        () => this.ctx.database.remove('memesluna_images', { id: image.id }))
+    } else {
+      await this.ctx.database.remove('memesluna_images', { id: image.id })
     }
-
-    await this.ctx.database.remove('memesluna_images', { id: image.id })
     this.notifyImagesChanged()
     return true
   }
 
-  async moveImageToCollection(
+  async moveImageToCollection(sourceCollection: string, targetCollection: string, filename: string): Promise<string | null> {
+    return withStorageLock(this.getStorageRoot(), () => this.moveImageToCollectionUnlocked(sourceCollection, targetCollection, filename))
+  }
+
+  private async moveImageToCollectionUnlocked(
     sourceCollection: string,
     targetCollection: string,
     filename: string
@@ -1542,77 +1524,61 @@ export class MemesLunaService extends Service {
 
     const image = rows[0]
 
-    // Determine the next index in target
+    if (sourceCollection === targetCollection) return safeName
+    if (image.type !== 'local') return null
     const maxImg = await this.ctx.database.get('memesluna_images', { collection: targetCollection }, { limit: 1, sort: { index: 'desc' } })
     const targetIndex = maxImg.length ? maxImg[0].index + 1 : 1
-    const ext = path.extname(safeName).toLowerCase()
-    const targetFilename = `${targetIndex}${ext}`
-
-    if (image.type === 'local') {
-      const sourcePath = path.join(this.getCollectionDir(sourceCollection), safeName)
-      const targetDir = this.getCollectionDir(targetCollection)
-      const targetPath = path.join(targetDir, targetFilename)
-      try {
-        await fs.rename(sourcePath, targetPath)
-        await this.ctx.database.set('memesluna_images', { id: image.id }, {
-          collection: targetCollection,
-          index: targetIndex,
-          filename: targetFilename,
-          value: targetFilename,
-        })
-        this.notifyImagesChanged()
-        return targetFilename
-      } catch {
-        return null
-      }
+    const targetFilename = await this.deduplicateDatabaseFilename(targetCollection, safeName)
+    const sourcePath = path.join(this.getCollectionDir(sourceCollection), safeName)
+    const targetPath = path.join(this.getCollectionDir(targetCollection), targetFilename)
+    await fs.copyFile(sourcePath, targetPath, (await import('fs')).constants.COPYFILE_EXCL)
+    try {
+      await removeWithRollback(this.getStorageRoot(), sourcePath, () => this.ctx.database.set('memesluna_images', { id: image.id }, {
+        collection: targetCollection,
+        index: targetIndex,
+        filename: targetFilename,
+        value: targetFilename,
+      }))
+    } catch (error) {
+      await fs.unlink(targetPath)
+      throw error
     }
-
-    return null
+    this.notifyImagesChanged()
+    return targetFilename
   }
+
 
   async getCollectionInfo(collectionName: string): Promise<CollectionInfo | null> {
-    if (!this.isValidCollectionName(collectionName)) {
-      return null
-    }
-    if (!(await this.collectionExists(collectionName))) {
-      return null
-    }
-
-    const localImages = await this.getCollectionImages(collectionName)
-    const links = await this.getCollectionLinks(collectionName)
-    const description = await this.getCollectionDescription(collectionName)
-    const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName }, ['created_at'])
-    const dates = rows
-      .map((row) => new Date(row.created_at as Date))
-      .filter((date) => !Number.isNaN(date.getTime()))
-
-    let statCreatedAt: Date | undefined
-    let statUpdatedAt: Date | undefined
-    try {
-      const stat = await fs.stat(this.getCollectionDir(collectionName))
-      statCreatedAt = stat.birthtime
-      statUpdatedAt = stat.mtime
-    } catch {}
-
-    const createdAt = dates.length
-      ? new Date(Math.min(...dates.map((date) => date.getTime()), statCreatedAt?.getTime() || Infinity))
-      : statCreatedAt
-    const updatedAt = dates.length
-      ? new Date(Math.max(...dates.map((date) => date.getTime()), statUpdatedAt?.getTime() || 0))
-      : statUpdatedAt
-    return {
-      name: collectionName,
-      description,
-      localCount: localImages.length,
-      linkCount: links.length,
-      totalCount: localImages.length + links.length,
-      hasContent: localImages.length > 0 || links.length > 0,
-      createdAt,
-      updatedAt,
-      cover: localImages[0],
-    }
+    if (!this.isValidCollectionName(collectionName) || !(await this.collectionExists(collectionName))) return null
+    return (await this.getCollectionInfos([collectionName]))[0] || null
   }
 
+  async getCollectionInfos(names?: string[]): Promise<CollectionInfo[]> {
+    const collections = names || await this.getCollections()
+    if (!collections.length) return []
+    const rows = await this.ctx.database.get('memesluna_images', { collection: collections }, ['collection', 'filename', 'type', 'created_at'])
+    const summaries = new Map<string, { local: number; external: number; cover?: string; first: number; last: number }>()
+    for (const row of rows) {
+      const summary = summaries.get(row.collection) || { local: 0, external: 0, first: Infinity, last: 0 }
+      if (row.type === 'external') summary.external++
+      else { summary.local++; summary.cover ||= row.filename }
+      const time = new Date(row.created_at).getTime()
+      if (Number.isFinite(time)) { summary.first = Math.min(summary.first, time); summary.last = Math.max(summary.last, time) }
+      summaries.set(row.collection, summary)
+    }
+    const result = new Map<string, CollectionInfo>()
+    await mapPool(collections, BACKFILL_CONCURRENCY, async (name) => {
+      const summary = summaries.get(name) || { local: 0, external: 0, first: Infinity, last: 0 }
+      const stat = await fs.stat(this.getCollectionDir(name))
+      result.set(name, {
+        name, description: await this.getCollectionDescription(name),
+        localCount: summary.local, linkCount: summary.external, totalCount: summary.local + summary.external,
+        hasContent: summary.local + summary.external > 0, cover: summary.cover,
+        createdAt: new Date(Math.min(summary.first, stat.birthtimeMs)), updatedAt: new Date(Math.max(summary.last, stat.mtimeMs)),
+      })
+    })
+    return collections.map((name) => result.get(name)!)
+  }
 
 
   async getRandomResource(collectionName: string): Promise<CollectionResource | null> {
@@ -1683,6 +1649,10 @@ export class MemesLunaService extends Service {
   }
 
   async addEndpoint(input: ApiEndpointInput): Promise<string> {
+    return withStorageLock(this.getStorageRoot(), () => this.addEndpointUnlocked(input))
+  }
+
+  private async addEndpointUnlocked(input: ApiEndpointInput): Promise<string> {
     this.ensureEndpointName(input.name)
     if (!input.url) {
       throw new Error('Endpoint URL is required.')
@@ -1710,10 +1680,15 @@ export class MemesLunaService extends Service {
       created_at: now,
       updated_at: now,
     })
+    this.notifyImagesChanged()
     return id
   }
 
   async updateEndpoint(name: string, input: Partial<ApiEndpointInput>): Promise<boolean> {
+    return withStorageLock(this.getStorageRoot(), () => this.updateEndpointUnlocked(name, input))
+  }
+
+  private async updateEndpointUnlocked(name: string, input: Partial<ApiEndpointInput>): Promise<boolean> {
     const current = await this.getEndpointByName(name)
     if (!current) {
       return false
@@ -1733,21 +1708,28 @@ export class MemesLunaService extends Service {
     payload.proxy_settings = JSON.stringify({})
 
     await this.ctx.database.set('memesluna_endpoints', { name }, payload)
+    this.notifyImagesChanged()
     return true
   }
 
   async deleteEndpoint(name: string): Promise<boolean> {
+    return withStorageLock(this.getStorageRoot(), () => this.deleteEndpointUnlocked(name))
+  }
+
+  private async deleteEndpointUnlocked(name: string): Promise<boolean> {
     const before = await this.ctx.database.get('memesluna_endpoints', { name })
     if (!before.length) {
       return false
     }
     await this.ctx.database.remove('memesluna_endpoints', { name })
+    this.notifyImagesChanged()
     return true
   }
 
-  async buildRouteInventory(backendPath: string): Promise<string> {
-    const endpoints = await this.getEndpoints()
-    const collections = await this.getCollections()
+  async buildRouteInventory(backendPath: string, data?: { endpoints: ApiEndpoint[]; collections: CollectionInfo[] }): Promise<string> {
+    const [endpoints, collections] = await Promise.all([
+      data?.endpoints || this.getEndpoints(), data?.collections || this.getCollectionInfos(),
+    ])
 
     const sections: string[] = []
 
@@ -1762,11 +1744,10 @@ export class MemesLunaService extends Service {
 
     // 表情包合集分节
     const collectionLines: string[] = []
-    for (const collection of collections) {
-      const info = await this.getCollectionInfo(collection)
-      if (info?.hasContent) {
+    for (const info of collections) {
+      if (info.hasContent) {
         const desc = info.description ? `（${info.description}）` : ''
-        collectionLines.push(`  - ${collection}${desc} → ${backendPath}/${encodeURIComponent(collection)}`)
+        collectionLines.push(`  - ${info.name}${desc} → ${backendPath}/${encodeURIComponent(info.name)}`)
       }
     }
     if (collectionLines.length > 0) {

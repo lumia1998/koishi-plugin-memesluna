@@ -46,6 +46,7 @@ export interface Config {
   aiBackoffBase: number
   aiDailyLimit: number
   aiWarnThreshold: number
+  aiRequestTimeoutMs: number
 }
 
 export const Config: Schema<Config> = Schema.intersect([
@@ -146,10 +147,13 @@ export const Config: Schema<Config> = Schema.intersect([
       .description('AI 标注失败后的最大重试次数'),
     aiBackoffBase: Schema.number()
       .min(100).max(10000).default(1000)
-      .description('重试退避基数（毫秒），每次重试等待时间 = 基数 × 重试次数'),
+      .description('重试退避基数（毫秒），使用指数退避'),
     aiDailyLimit: Schema.number()
       .min(0).max(10000).default(1000)
-      .description('每日 AI 标注次数上限，0 表示不限制（建议设置以控制成本）'),
+      .description('每日 AI 请求次数上限，包含失败和重试，计数持久化；按 UTC 日期重置，0 表示不限制'),
+    aiRequestTimeoutMs: Schema.number()
+      .min(1000).max(300000).default(60000)
+      .description('单次 AI 请求超时（毫秒），超时后取消请求'),
     aiWarnThreshold: Schema.number()
       .min(0).max(1).step(0.1).default(0.8)
       .description('AI 标注用量警告阈值（0-1），达到此比例时发出警告'),

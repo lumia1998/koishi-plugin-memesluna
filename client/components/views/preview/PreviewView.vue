@@ -12,6 +12,19 @@
             </div>
 
             <div class="preview-dashboard-grid">
+              <section class="preview-card">
+                <div class="preview-card-header">
+                  <div class="preview-card-title">AI 标注任务</div>
+                  <button @click="refreshAnnotationStatus" class="preview-action-btn">刷新状态</button>
+                </div>
+                <template v-if="annotationStatus">
+                  <p>排队 {{ annotationStatus.pending }} · 处理中 {{ annotationStatus.active }} · 成功 {{ annotationStatus.success }} · 失败 {{ annotationStatus.fail }} · 跳过 {{ annotationStatus.skipped }} · 取消 {{ annotationStatus.cancelled }}</p>
+                  <p v-if="annotationStatus.usage">今日请求 {{ annotationStatus.usage.requests }} · 重试 {{ annotationStatus.usage.retries }} · 成功标注 {{ annotationStatus.usage.successes }} · 失败请求 {{ annotationStatus.usage.failures }}</p>
+                  <p v-if="annotationStatus.usage">每日上限 {{ annotationStatus.usage.dailyLimit || '不限' }} · 剩余 {{ annotationStatus.usage.remaining < 0 ? '不限' : annotationStatus.usage.remaining }}</p>
+                  <button @click="cancelAnnotationTasks" class="preview-action-btn" :disabled="annotationStatusBusy || !(annotationStatus.pending || annotationStatus.active)">取消标注任务</button>
+                </template>
+                <p v-else>点击刷新查看标注任务和今日用量。</p>
+              </section>
               <section class="preview-card route-table-card">
                 <div class="preview-card-header">
                   <div>

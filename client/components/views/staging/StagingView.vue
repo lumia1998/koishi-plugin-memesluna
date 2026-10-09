@@ -55,7 +55,7 @@
               <div class="similar-group-header">
                 <div>
                   <h3>相似组 {{ group.label }}</h3>
-                  <p>{{ group.items.length }} 张候选，最高相似度 {{ formatPercent(group.similarity) }}</p>
+                  <p>{{ group.items.length }} 张候选，与代表图最低相似度 {{ formatPercent(group.similarity) }}</p>
                 </div>
               </div>
               <div class="staging-grid">
@@ -79,7 +79,7 @@
                     </svg>
                   </button>
                   <button class="staging-image-shell" @click="openImage(getStagedImageUrl(item.id))" title="打开原图">
-                    <img
+                    <AuthenticatedImage
                       class="staging-image"
                       :src="getStagedImageUrl(item.id)"
                       :alt="item.originalName || item.filename"
@@ -180,7 +180,7 @@
                   </svg>
                 </button>
                 <button class="staging-image-shell" @click="openImage(getStagedImageUrl(item.id))" title="打开原图">
-                  <img
+                  <AuthenticatedImage
                     class="staging-image"
                     :src="getStagedImageUrl(item.id)"
                     :alt="item.originalName || item.filename"
@@ -239,10 +239,12 @@
 </template>
 <script lang="ts">
 import { defineComponent, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import AuthenticatedImage from '../../shared/AuthenticatedImage.vue'
 import { useDashboardContext } from '../../../composables/dashboardContext'
 
 export default defineComponent({
   name: 'StagingView',
+  components: { AuthenticatedImage },
   setup() {
     const ctx = useDashboardContext()
     const stagingGridEl = ref<HTMLElement | null>(null)

@@ -12,14 +12,10 @@ export function registerCommands(ctx: Context, config: Config) {
       const service = ctx.memesluna
       await service.ready
 
-      const [collectionNames, endpoints] = await Promise.all([
-        service.getCollections(),
-        service.getEndpoints(),
+      const [collections, endpoints] = await Promise.all([
+        service.getCollectionInfos(), service.getEndpoints(),
       ])
-
-      const collectionInfos = (
-        await Promise.all(collectionNames.map((collectionName) => service.getCollectionInfo(collectionName)))
-      ).filter((info): info is NonNullable<typeof info> => !!info?.hasContent)
+      const collectionInfos = collections.filter((info) => info.hasContent)
 
       const lines: string[] = collectionInfos
         .map((info) => `${info.name} ${info.name}表情包`)
@@ -160,24 +156,20 @@ export function registerCommands(ctx: Context, config: Config) {
         await session.send(`开始批量为 ${targets.length} 张图片进行 AI 自动标注，这可能需要一些时间，请稍候...`)
       }
 
-      let successCount = 0
-      let failCount = 0
-      const chunkSize = 20
+      let lastProgress = 0
+      // 整批只入队一次，取消后不会由后续分块重新创建任务。
+      const result = await service.queueAnnotation(targets, {
+        force: true,
+        onProgress: async (success, fail) => {
+          const completed = success + fail
+          if (session && completed >= lastProgress + 20) {
+            lastProgress = completed
+            await session.send(`已处理 ${completed}/${targets.length} 张图片（成功：${success}，失败：${fail}）...`)
+          }
+        },
+      })
+      return `批量 AI 标注${result.cancelled ? '已取消' : '已结束'}！\n成功：${result.success} 张\n失败：${result.fail} 张\n跳过：${result.skipped} 张\n取消：${result.cancelled} 张`
 
-      for (let i = 0; i < targets.length; i += chunkSize) {
-        const chunk = targets.slice(i, i + chunkSize)
-        if (session) {
-          await session.send(`正在处理第 ${i + 1} ~ ${Math.min(i + chunkSize, targets.length)} 张图片（当前成功：${successCount}，失败：${failCount}）...`)
-        }
-
-        // 预筛选已按 force/空 tags 决定目标；此处 force:true 跳过队列内二次检查，
-        // 与旧 tagall 行为一致（仅看 tags 是否为空时仍会标注已有 aliases 的图）
-        const result = await service.queueAnnotation(chunk, { force: true })
-        successCount += result.success
-        failCount += result.fail
-      }
-
-      return `批量 AI 标注已完成！\n成功：${successCount} 张\n失败：${failCount} 张`
     })
 
   root

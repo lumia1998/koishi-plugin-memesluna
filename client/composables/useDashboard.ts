@@ -1,5 +1,10 @@
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { sendMemesLuna } from './rpc'
+import { adminFetch } from './adminFetch'
+import { CollectionPageLoader } from './collectionResources'
+import { settledBatch } from './batch'
+import { useAnnotationStatus } from './useAnnotationStatus'
+import { MAX_IMAGE_BYTES } from '../../src/constants'
 import type {
   ConsoleCollectionInfo as CollectionInfo,
   ConsoleEndpointInfo as EndpointInfo,
@@ -46,6 +51,7 @@ export function useDashboard() {
   // Navigation states
   const activeMenu = ref<MainMenu>(readSessionOption('memesluna_active_menu', 'resources', ['resources', 'distribution', 'staging', 'settings']))
 
+  const annotation = useAnnotationStatus(showToast)
   const loading = ref(true)
 
   // Core state data
@@ -87,6 +93,8 @@ export function useDashboard() {
     links: [] as string[]
   })
   const collectionPreviews = reactive<Record<string, CollectionPreviewState>>({})
+  const galleryTotal = ref(0)
+  const pageLoader = new CollectionPageLoader((name, query) => sendMemesLuna('memesluna/getCollectionResources', name, query))
   const currentGalleryTab = ref<'all' | 'local' | 'external'>('all')
   const showImportLinks = ref(false)
   const selectedImageSet = ref<Set<string>>(new Set())
@@ -110,6 +118,10 @@ export function useDashboard() {
   const aiAnnotating = ref(false)
   const imageTagsCache = ref<Record<string, string[]>>({})
   const imageAliasesCache = ref<Record<string, string[]>>({})
+  let tagEditorLoad = 0
+  let tagSaveVersion = 0
+  let tagSaveChain: Promise<void> = Promise.resolve()
+  let tagSavesPending = 0
 
   // Bulk Tag and Metadata editor state
   const bulkTagEditorVisible = ref(false)
@@ -158,35 +170,25 @@ export function useDashboard() {
 
     const filenames = [...selectedImages.value]
     const collectionName = currentCollection.value.name
+    const tags = [...bulkTagEditorTags.value]
+    const aliases = [...bulkTagEditorAliases.value]
+    const mode = bulkTagOperationMode.value
 
     try {
-      await Promise.all(filenames.map(async (filename) => {
-        const key = getImageCacheKey(collectionName, filename)
-        let finalTags = [...bulkTagEditorTags.value]
-        let finalAliases = [...bulkTagEditorAliases.value]
-
-        if (bulkTagOperationMode.value === 'add') {
-          const existingTags = imageTagsCache.value[key] || []
-          const existingAliases = imageAliasesCache.value[key] || []
-          finalTags = Array.from(new Set([...existingTags, ...finalTags]))
-        finalAliases = Array.from(new Set([...existingAliases, ...finalAliases]))
-      }
-
-      await sendMemesLuna('memesluna/updateImageMetadata', {
-          collectionName,
-          filename,
-          tags: finalTags,
-          aliases: finalAliases,
+      const results = await settledBatch(filenames, async (filename) => {
+        const result = await sendMemesLuna('memesluna/updateImageMetadata', {
+          collectionName, filename, tags, aliases, mode,
         })
+        if (!result?.ok) throw new Error(result?.error || '标注保存失败')
+        const key = getImageCacheKey(collectionName, filename)
+        imageTagsCache.value[key] = result.tags || []
+        imageAliasesCache.value[key] = result.aliases || []
+      })
+      const failedNames = filenames.filter((_, index) => results[index].status === 'rejected')
+      if (currentCollection.value?.name === collectionName) selectedImageSet.value = new Set(failedNames)
+      showToast(`批量修改完成：成功 ${filenames.length - failedNames.length} 张，失败 ${failedNames.length} 张`, failedNames.length ? 'error' : 'success')
+      if (!failedNames.length) bulkTagEditorVisible.value = false
 
-        // Update cache
-        imageTagsCache.value[key] = finalTags
-        imageAliasesCache.value[key] = finalAliases
-      }))
-
-      showToast(`成功应用批量修改（共 ${filenames.length} 张图片）`, 'success')
-      clearSelectedImages()
-      bulkTagEditorVisible.value = false
     } catch (err) {
       console.error('Failed to save bulk tags:', err)
       showToast('批量设置标签失败', 'error')
@@ -212,20 +214,6 @@ export function useDashboard() {
     return Math.max(0, getImageTags(filename).length - getVisibleImageTags(filename).length)
   }
 
-  async function loadImageTagsBatch(collection: string, filenames: string[]) {
-    const results = await Promise.allSettled(
-      filenames.map((fn) => sendMemesLuna('memesluna/getImageMetadata', collection, fn))
-    )
-    for (let i = 0; i < filenames.length; i++) {
-      const result = results[i]
-      if (result.status === 'fulfilled' && result.value?.ok) {
-        const key = getImageCacheKey(collection, filenames[i])
-        imageTagsCache.value[key] = result.value.tags || []
-        imageAliasesCache.value[key] = result.value.aliases || []
-      }
-    }
-  }
-
   const TAG_PALETTE_LIGHT = ['#f97316','#ec4899','#8b5cf6','#06b6d4','#22c55e','#eab308','#f43f5e','#14b8a6','#a855f7','#3b82f6']
   // Brighter palette for dark backgrounds to keep badge text readable
   const TAG_PALETTE_DARK = ['#fb923c','#f472b6','#a78bfa','#22d3ee','#4ade80','#facc15','#fb7185','#2dd4bf','#c084fc','#60a5fa']
@@ -247,6 +235,7 @@ export function useDashboard() {
   }
 
   async function openTagEditor(collection: string, filename: string) {
+    const generation = ++tagEditorLoad
     tagEditorCollection.value = collection
     tagEditorImage.value = filename
     tagEditorInput.value = ''
@@ -254,9 +243,11 @@ export function useDashboard() {
     aiAnnotating.value = false
     try {
       const result = await sendMemesLuna('memesluna/getImageMetadata', collection, filename)
+      if (generation !== tagEditorLoad) return
       tagEditorTags.value = result?.ok ? (result.tags || []) : []
       tagEditorAliases.value = result?.ok ? (result.aliases || []) : []
     } catch {
+      if (generation !== tagEditorLoad) return
       tagEditorTags.value = []
       tagEditorAliases.value = []
     }
@@ -293,14 +284,17 @@ export function useDashboard() {
   async function triggerAIAnnotation() {
     if (aiAnnotating.value || tagEditorSaving.value) return
     aiAnnotating.value = true
+    const collection = tagEditorCollection.value
+    const filename = tagEditorImage.value
     try {
-      const result = await sendMemesLuna('memesluna/annotateImage', tagEditorCollection.value, tagEditorImage.value)
+      const result = await sendMemesLuna('memesluna/annotateImage', collection, filename)
       if (result && result.ok) {
+        const key = getImageCacheKey(collection, filename)
+        imageTagsCache.value[key] = result.tags || []
+        imageAliasesCache.value[key] = result.aliases || []
+        if (tagEditorCollection.value !== collection || tagEditorImage.value !== filename) return
         tagEditorTags.value = result.tags || []
         tagEditorAliases.value = result.aliases || []
-        const key = getImageCacheKey(tagEditorCollection.value, tagEditorImage.value)
-        imageTagsCache.value[key] = [...tagEditorTags.value]
-        imageAliasesCache.value[key] = [...tagEditorAliases.value]
         showToast('AI 语义标注已成功完成！', 'success')
       } else {
         showToast(result?.error || 'AI 标注失败，请检查配置或模型状态', 'error')
@@ -312,28 +306,35 @@ export function useDashboard() {
     }
   }
 
-  async function saveTagEditor() {
+  function saveTagEditor(): Promise<void> {
+    const collection = tagEditorCollection.value
+    const filename = tagEditorImage.value
+    const tags = [...tagEditorTags.value]
+    const aliases = [...tagEditorAliases.value]
+    const version = ++tagSaveVersion
+    tagSavesPending++
     tagEditorSaving.value = true
-    try {
-      await sendMemesLuna('memesluna/updateImageMetadata', {
-        collectionName: tagEditorCollection.value,
-        filename: tagEditorImage.value,
-        tags: tagEditorTags.value,
-        aliases: tagEditorAliases.value,
-      })
-      const key = getImageCacheKey(tagEditorCollection.value, tagEditorImage.value)
-      imageTagsCache.value[key] = [...tagEditorTags.value]
-      imageTagsCache.value = { ...imageTagsCache.value }
-      imageAliasesCache.value[key] = [...tagEditorAliases.value]
-      imageAliasesCache.value = { ...imageAliasesCache.value }
-    } catch (err) {
-      console.error('Failed to save tags:', err)
-    } finally {
-      tagEditorSaving.value = false
+    const save = async () => {
+      try {
+        const result = await sendMemesLuna('memesluna/updateImageMetadata', { collectionName: collection, filename, tags, aliases })
+        if (!result?.ok) throw new Error(result?.error || '标注保存失败')
+        const key = getImageCacheKey(collection, filename)
+        imageTagsCache.value[key] = result.tags || []
+        imageAliasesCache.value[key] = result.aliases || []
+        if (version === tagSaveVersion && tagEditorCollection.value === collection && tagEditorImage.value === filename) {
+          tagEditorTags.value = result.tags || []
+          tagEditorAliases.value = result.aliases || []
+        }
+      } catch (err) { showToast(err instanceof Error ? err.message : '标注保存失败', 'error') }
+      finally { tagSavesPending--; tagEditorSaving.value = tagSavesPending > 0 }
     }
+    const next = tagSaveChain.then(save, save)
+    tagSaveChain = next
+    return next
   }
 
   function closeTagEditor() {
+    tagEditorLoad++
     tagEditorVisible.value = false
     tagEditorImage.value = ''
     tagEditorTags.value = []
@@ -406,13 +407,14 @@ export function useDashboard() {
   const currentPage = ref(1)
   const pageSize = ref(24)
   const galleryItems = computed<AssetGalleryItem[]>(() => {
-    if (!currentCollection.value) return []
+    const collection = currentCollection.value
+    if (!collection) return []
 
     const localItems = detailResources.images.map((filename) => ({
       id: `local:${filename}`,
       type: 'local' as const,
       label: filename,
-      src: getLocalImageApiUrl(currentCollection.value.name, filename),
+      src: getLocalImageApiUrl(collection.name, filename),
       value: filename
     }))
     const externalItems = detailResources.links.map((link) => ({
@@ -427,26 +429,9 @@ export function useDashboard() {
     if (currentGalleryTab.value === 'external') return externalItems
     return [...localItems, ...externalItems]
   })
-  const filteredGalleryItems = computed(() => {
-    const query = gallerySearch.value.trim().toLowerCase()
-    let items = galleryItems.value.filter((item) => {
-      if (!query) return true
-      return item.label.toLowerCase().includes(query) || item.value.toLowerCase().includes(query)
-    })
-    if (galleryFilter.value === 'selected') {
-      items = items.filter((item) => item.type === 'local' && selectedImageSet.value.has(item.value))
-    }
-    return [...items].sort((a, b) => gallerySort.value === 'nameDesc'
-      ? b.label.localeCompare(a.label)
-      : a.label.localeCompare(b.label))
-  })
-  const totalPages = computed(() => {
-    return Math.max(1, Math.ceil(filteredGalleryItems.value.length / pageSize.value))
-  })
-  const paginatedGalleryItems = computed(() => {
-    const start = (currentPage.value - 1) * pageSize.value
-    return filteredGalleryItems.value.slice(start, start + pageSize.value)
-  })
+  const filteredGalleryItems = computed(() => galleryItems.value)
+  const totalPages = computed(() => Math.max(1, Math.ceil(galleryTotal.value / pageSize.value)))
+  const paginatedGalleryItems = computed(() => filteredGalleryItems.value)
   const selectedImages = computed(() => Array.from(selectedImageSet.value))
   const areAllCurrentPageImagesSelected = computed(() => {
     const localItems = paginatedGalleryItems.value.filter((item) => item.type === 'local')
@@ -454,7 +439,7 @@ export function useDashboard() {
   })
   const currentCollectionCoverUrl = computed(() => {
     if (!currentCollection.value) return ''
-    const local = detailResources.images[0]
+    const local = currentCollection.value.cover || detailResources.images[0]
     if (local) return getLocalImageApiUrl(currentCollection.value.name, local)
     return detailResources.links[0] || ''
   })
@@ -462,7 +447,7 @@ export function useDashboard() {
     return currentCollection.value ? getBaseRedirectUrl(currentCollection.value.name) : ''
   })
   const currentCollectionTotalCount = computed(() => {
-    return currentCollection.value?.totalCount || detailResources.images.length + detailResources.links.length
+    return currentCollection.value?.totalCount || 0
   })
   const endpointPreviewUrl = computed(() => {
     const name = endpointForm.name.trim()
@@ -582,9 +567,12 @@ export function useDashboard() {
 
     try {
       loading.value = true
-      await Promise.all(ids.map((id) => sendMemesLuna('memesluna/deleteStagedImage', id)))
-      showToast(`已删除 ${ids.length} 张暂缓图片`, 'success')
-      clearSelectedStaged()
+      const results = await settledBatch(ids, async (id) => {
+        if (!await sendMemesLuna('memesluna/deleteStagedImage', id)) throw new Error('删除失败')
+      })
+      const failed = ids.filter((_, index) => results[index].status === 'rejected')
+      showToast(`暂缓区删除完成：成功 ${ids.length - failed.length} 张，失败 ${failed.length} 张`, failed.length ? 'error' : 'success')
+      selectedStagedIds.value = new Set(failed)
       await refreshStagedImages()
       await fetchState()
     } catch (err) {
@@ -670,7 +658,7 @@ export function useDashboard() {
   }
 
   function getLocalImageApiUrl(collection: string, filename: string): string {
-    return `${getBackendBaseUrl()}/api/admin/collections/${encodeURIComponent(collection)}/images/${encodeURIComponent(filename)}`
+    return `${getBackendBaseUrl()}/api/collections/${encodeURIComponent(collection)}/images/${encodeURIComponent(filename)}`
   }
 
   function getStagedImageUrl(id: string): string {
@@ -745,22 +733,15 @@ export function useDashboard() {
   }
 
   async function loadCollectionPreview(collection: CollectionInfo) {
-    if (!collection.hasContent || collectionPreviews[collection.name]?.images.length) return
+    if (!collection.hasContent || collectionPreviews[collection.name]?.images.length || collectionPreviews[collection.name]?.loading) return
     collectionPreviews[collection.name] = collectionPreviews[collection.name] || { loading: true, images: [] }
     collectionPreviews[collection.name].loading = true
 
     try {
-      const response = await fetch(`${getBackendBaseUrl()}/api/collections/${encodeURIComponent(collection.name)}/resources`)
-      if (!response.ok) return
+      const data = await sendMemesLuna('memesluna/getCollectionResources', collection.name, { limit: 9 })
+      collectionPreviews[collection.name].images = data.items.map((item) => item.type === 'local'
+        ? getLocalImageApiUrl(collection.name, item.filename) : item.value)
 
-      const data = await response.json()
-      const previewLimit = 9
-      const localImages = Array.isArray(data.images)
-        ? data.images.slice(0, previewLimit).map((filename: string) => getLocalImageApiUrl(collection.name, filename))
-        : []
-      const externalImages = Array.isArray(data.links) ? data.links.slice(0, previewLimit - localImages.length) : []
-
-      collectionPreviews[collection.name].images = [...localImages, ...externalImages]
     } catch {
       collectionPreviews[collection.name].images = []
     } finally {
@@ -768,13 +749,8 @@ export function useDashboard() {
     }
   }
 
-  function warmCollectionPreviews() {
-    collections.value
-      .filter((item) => item.hasContent)
-      .slice(0, 24)
-      .forEach((item) => {
-        void loadCollectionPreview(item)
-      })
+  async function warmCollectionPreviews() {
+    await settledBatch(collections.value.filter((item) => item.hasContent).slice(0, 24), loadCollectionPreview)
   }
 
   // Fetch variables from Koishi app
@@ -794,7 +770,7 @@ export function useDashboard() {
           const match = collections.value.find((c) => c.name === currentCollection.value?.name)
           if (match) currentCollection.value = match
         }
-        warmCollectionPreviews()
+        void warmCollectionPreviews()
       }
     } catch (err) {
       showToast(err instanceof Error ? err.message : '获取插件状态同步失败', 'error')
@@ -802,6 +778,7 @@ export function useDashboard() {
   }
 
   async function fetchSettingsPreview() {
+    await annotation.refreshAnnotationStatus()
     try {
       const response = await fetch(`${getBackendBaseUrl()}/api/homepage-data`)
       if (response.ok) {
@@ -962,8 +939,8 @@ export function useDashboard() {
 
     const payload: ConsoleEndpointInput = {
       name,
-      group: endpointForm.group.trim() || '默认分组',
-      description: endpointForm.description.trim(),
+      group: (endpointForm.group || '').trim() || '默认分组',
+      description: (endpointForm.description || '').trim(),
       url,
       method: 'redirect' as const,
     }
@@ -1062,6 +1039,10 @@ export function useDashboard() {
 
   async function enterCollectionDetail(item: CollectionInfo) {
     activeCollectionMenu.value = null
+    pageLoader.invalidate()
+    detailResources.images = []
+    detailResources.links = []
+    galleryTotal.value = 0
     currentCollection.value = item
     sessionStorage.setItem('memesluna_active_collection', item.name)
     newDescription.value = item.description || ''
@@ -1074,15 +1055,15 @@ export function useDashboard() {
     currentPage.value = 1
     clearSelectedImages()
     await loadCollectionResources(item.name)
-    // Load tags for all images in this collection
-    const allFns = [...detailResources.images]
-    if (allFns.length) {
-      loadImageTagsBatch(item.name, allFns)
-    }
+
   }
 
   function exitCollectionDetail() {
+    pageLoader.invalidate()
     currentCollection.value = null
+    detailResources.images = []
+    detailResources.links = []
+    galleryTotal.value = 0
     sessionStorage.removeItem('memesluna_active_collection')
     if (apiPreviewUrl.value) URL.revokeObjectURL(apiPreviewUrl.value)
     apiPreviewUrl.value = ''
@@ -1090,17 +1071,28 @@ export function useDashboard() {
   }
 
   async function loadCollectionResources(name: string) {
+    if (currentCollection.value?.name !== name) return
     try {
-      const response = await fetch(`${getBackendBaseUrl()}/api/collections/${encodeURIComponent(name)}/resources`)
-      if (response.ok) {
-        const data = await response.json()
-        detailResources.images = Array.isArray(data.images) ? data.images : []
-        detailResources.links = Array.isArray(data.links) ? data.links : []
-        const available = new Set(detailResources.images)
-        selectedImageSet.value = new Set(selectedImages.value.filter((img) => available.has(img)))
+      const data = await pageLoader.load(name, {
+        offset: (currentPage.value - 1) * pageSize.value, limit: pageSize.value,
+        type: currentGalleryTab.value, search: gallerySearch.value, sort: gallerySort.value,
+        selected: galleryFilter.value === 'selected' ? selectedImages.value : undefined,
+      })
+      if (!data || currentCollection.value?.name !== name) return
+      galleryTotal.value = data.total
+      if (currentPage.value > totalPages.value) {
+        currentPage.value = totalPages.value
+        return
+      }
+      detailResources.images = data.items.filter((item) => item.type === 'local').map((item) => item.filename)
+      detailResources.links = data.items.filter((item) => item.type === 'external').map((item) => item.value)
+      for (const item of data.items) {
+        const key = getImageCacheKey(name, item.filename)
+        imageTagsCache.value[key] = item.tags
+        imageAliasesCache.value[key] = item.aliases
       }
     } catch (err) {
-      showToast('加载该表情包下的图片缓存失败', 'error')
+      showToast(err instanceof Error ? err.message : '加载表情包图片失败', 'error')
     }
   }
 
@@ -1109,7 +1101,7 @@ export function useDashboard() {
     loading.value = true
     await loadCollectionResources(currentCollection.value.name)
     await fetchState()
-    const match = collections.value.find(c => c.name === currentCollection.value.name)
+    const match = collections.value.find(c => c.name === currentCollection.value?.name)
     if (match) {
       currentCollection.value = match
     }
@@ -1155,7 +1147,7 @@ export function useDashboard() {
       await sendMemesLuna('memesluna/setCollectionDescription', currentCollection.value.name, newDescription.value.trim())
       showToast('表情包描述已成功保存', 'success')
       await fetchState()
-      const match = collections.value.find(c => c.name === currentCollection.value.name)
+      const match = collections.value.find(c => c.name === currentCollection.value?.name)
       if (match) currentCollection.value = match
     } catch (err) {
       showToast(err instanceof Error ? err.message : '保存表情包描述失败', 'error')
@@ -1186,8 +1178,11 @@ export function useDashboard() {
   async function uploadFiles(files: FileList) {
     if (!currentCollection.value) return
 
+    const destinationCollection = currentCollection.value.name
     const maxSize = 10 * 1024 * 1024
     const fileList = Array.from(files)
+    if (fileList.length > 500) { showToast('单次选择图片上限为 500 张', 'error'); return }
+    if (fileList.some((file) => file.size > MAX_IMAGE_BYTES)) { showToast('单张图片最大为 50MB，请先压缩超大图片', 'error'); return }
     const imageFiles = fileList.filter((file) => {
       const name = file.name.toLowerCase()
       return file.type.startsWith('image/') || /\.(jpe?g|png|gif|bmp|webp|svg|tiff?|psd|avif)$/.test(name)
@@ -1248,7 +1243,7 @@ export function useDashboard() {
         const formData = new FormData()
         formData.append('images', file)
 
-        const response = await fetch(`${getBackendBaseUrl()}/api/admin/collections/${encodeURIComponent(currentCollection.value.name)}/images`, {
+        const response = await adminFetch(`${getBackendBaseUrl()}/api/admin/collections/${encodeURIComponent(destinationCollection)}/images`, {
           method: 'POST',
           body: formData
         })
@@ -1277,7 +1272,7 @@ export function useDashboard() {
       showToast(`图片上传失败${stagedHint}${avifHint}`, 'error')
     }
 
-    await loadCollectionResources(currentCollection.value.name)
+    await loadCollectionResources(destinationCollection)
     await fetchState()
   }
 
@@ -1357,10 +1352,14 @@ export function useDashboard() {
 
     try {
       loading.value = true
-      await Promise.all(names.map((filename) => sendMemesLuna('memesluna/deleteLocalImage', currentCollection.value!.name, filename)))
-      showToast(`已删除 ${names.length} 张本地图片`, 'success')
-      clearSelectedImages()
-      await loadCollectionResources(currentCollection.value.name)
+      const source = currentCollection.value.name
+      const results = await settledBatch(names, async (filename) => {
+        if (!await sendMemesLuna('memesluna/deleteLocalImage', source, filename)) throw new Error('删除失败')
+      })
+      const failed = names.filter((_, index) => results[index].status === 'rejected')
+      showToast(`删除完成：成功 ${names.length - failed.length} 张，失败 ${failed.length} 张`, failed.length ? 'error' : 'success')
+      if (currentCollection.value?.name === source) selectedImageSet.value = new Set(failed)
+      await loadCollectionResources(source)
       await fetchState()
     } catch (err) {
       showToast(err instanceof Error ? err.message : '批量删除失败', 'error')
@@ -1399,9 +1398,12 @@ export function useDashboard() {
     const names = selectedImages.value
     try {
       loading.value = true
-      await Promise.all(names.map((filename) => sendMemesLuna('memesluna/moveLocalImage', source, target, filename)))
-      showToast(`已将 ${names.length} 张素材移动至表情包 "${target}"`, 'success')
-      clearSelectedImages()
+      const results = await settledBatch(names, async (filename) => {
+        if (!await sendMemesLuna('memesluna/moveLocalImage', source, target, filename)) throw new Error('移动失败')
+      })
+      const failed = names.filter((_, index) => results[index].status === 'rejected')
+      showToast(`移动完成：成功 ${names.length - failed.length} 张，失败 ${failed.length} 张`, failed.length ? 'error' : 'success')
+      if (currentCollection.value?.name === source) selectedImageSet.value = new Set(failed)
       await loadCollectionResources(source)
       await fetchState()
     } catch (err) {
@@ -1412,7 +1414,17 @@ export function useDashboard() {
   }
 
   function openImage(url: string) {
-    window.open(url, '_blank')
+    if (url.startsWith(`${getBackendBaseUrl()}/api/admin/`)) {
+      const previewWindow = window.open('', '_blank')
+      void adminFetch(url).then(async (response) => {
+        if (!response.ok) throw new Error('原图加载失败')
+        const objectUrl = URL.createObjectURL(await response.blob())
+        if (previewWindow) previewWindow.location.href = objectUrl
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+      }).catch((error) => { previewWindow?.close(); showToast(error.message, 'error') })
+      return
+    }
+    window.open(url, '_blank', 'noopener')
   }
 
   function toggleCollectionMenu(name: string) {
@@ -1450,27 +1462,33 @@ export function useDashboard() {
   })
 
   onUnmounted(() => {
+    pageLoader.invalidate()
+    if (toastTimer) clearTimeout(toastTimer)
     window.removeEventListener('click', closeDropdowns)
     if (apiPreviewUrl.value) URL.revokeObjectURL(apiPreviewUrl.value)
   })
 
   // Listeners/Watchers
-  watch(detailResources, () => {
-    // Ensure current page does not go out of bounds on resource change
-    if (currentPage.value > totalPages.value && totalPages.value > 0) {
-      currentPage.value = totalPages.value
-    }
+  watch([gallerySearch, gallerySort, galleryFilter, currentGalleryTab], () => { currentPage.value = 1 })
+  let galleryReloadTimer: ReturnType<typeof setTimeout> | undefined
+  watch([gallerySearch, gallerySort, galleryFilter, currentGalleryTab, currentPage, pageSize], () => {
+    pageLoader.invalidate()
+    clearTimeout(galleryReloadTimer)
+    galleryReloadTimer = setTimeout(() => {
+      if (currentCollection.value) void loadCollectionResources(currentCollection.value.name)
+    }, 120)
   })
-
-  watch([gallerySearch, gallerySort, galleryFilter], () => {
-    currentPage.value = 1
+  watch(selectedImages, () => {
+    if (galleryFilter.value === 'selected' && currentCollection.value) void loadCollectionResources(currentCollection.value.name)
   })
+  onUnmounted(() => clearTimeout(galleryReloadTimer))
 
   watch([collectionSearchQuery, collectionFilter], () => {
     activeCollectionMenu.value = null
   })
 
   return {
+    ...annotation,
     activeMenu,
     loading,
     backendPath,
@@ -1537,7 +1555,6 @@ export function useDashboard() {
     getImageTags,
     getVisibleImageTags,
     getHiddenImageTagsCount,
-    loadImageTagsBatch,
     TAG_PALETTE: TAG_PALETTE_LIGHT,
     TAG_PALETTE_LIGHT,
     TAG_PALETTE_DARK,
@@ -1565,6 +1582,7 @@ export function useDashboard() {
     galleryItems,
     filteredGalleryItems,
     totalPages,
+    galleryTotal,
     paginatedGalleryItems,
     selectedImages,
     areAllCurrentPageImagesSelected,

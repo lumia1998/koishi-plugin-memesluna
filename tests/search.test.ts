@@ -1,12 +1,50 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   normalizeText,
   flattenText,
   splitTerms,
   rankImagesByQuery,
   toCachedImage,
+  buildInvertedIndex,
+  getImageSearchCache,
+  invalidateAllImagesCache,
 } from '../src/search'
 import { SEARCH_SCORING, SEARCH_SCORE_THRESHOLD } from '../src/constants'
+
+describe('搜索规模一致性及缓存', () => {
+  it('单字及混合查询在索引模式下与全扫描一致', () => {
+    const images = Array.from({ length: 501 }, (_, id) => toCachedImage({ id, filename: `file${id}.png`, aliases: id === 0 ? '["猫咪 hello"]' : id === 1 ? '["world"]' : id === 2 ? '["hello"]' : '[]', tags: '[]' }))
+    for (const query of ['猫', '猫 world', '猫咪', 'hello', 'file1', 'world hello']) {
+      expect(rankImagesByQuery(images, query, buildInvertedIndex(images))).toEqual(rankImagesByQuery(images, query))
+    }
+  })
+  it('并发刷新合并读取、复用索引并隔离不同数据库', async () => {
+    invalidateAllImagesCache()
+    const database = { get: vi.fn(async () => Array.from({ length: 501 }, (_, id) => ({ id, filename: `${id}.png` }))) }
+    const ctx = { database } as any
+    const [a, b] = await Promise.all([getImageSearchCache(ctx), getImageSearchCache(ctx)])
+    expect(a.index).toBe(b.index)
+    expect(database.get).toHaveBeenCalledTimes(1)
+    expect((await getImageSearchCache(ctx)).index).toBe(a.index)
+    const other = await getImageSearchCache({ database: { get: async () => [] } } as any)
+    expect(other.images).toEqual([])
+    invalidateAllImagesCache()
+    await getImageSearchCache(ctx)
+    expect(database.get).toHaveBeenCalledTimes(2)
+  })
+  it('读取期间发生写操作时重读，不向等待者发布旧数据', async () => {
+    let finish: (rows: any[]) => void
+    const database = { get: vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finish = resolve })).mockResolvedValue([{ id: 'new', filename: 'new.png' }]) }
+    const ctx = { database } as any
+    const first = getImageSearchCache(ctx)
+    const second = getImageSearchCache(ctx)
+    invalidateAllImagesCache()
+    finish!([{ id: 'old', filename: 'old.png' }])
+    expect((await first).images[0].row.id).toBe('new')
+    expect((await second).images[0].row.id).toBe('new')
+    expect(database.get).toHaveBeenCalledTimes(2)
+  })
+})
 
 describe('搜索评分逻辑', () => {
   describe('normalizeText', () => {

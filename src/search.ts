@@ -141,7 +141,8 @@ export function collectCandidateIndices(
     addFromTokens(collectLookupTokens(term))
   }
 
-  return Array.from(candidateSet)
+  // 保持全扫描的稳定同分顺序。
+  return Array.from(candidateSet).sort((a, b) => a - b)
 }
 
 function scoreCachedImage(
@@ -195,7 +196,9 @@ export function rankImagesByQuery(
 
   const useIndex =
     invertedIndex &&
-    images.length > SEARCH_INVERTED_INDEX_THRESHOLD
+    images.length > SEARCH_INVERTED_INDEX_THRESHOLD &&
+    // 单字符子串没有 bigram，必须保留全扫描语义（包括混合查询）。
+    terms.every((term) => flattenText(term).length >= 2)
 
   if (useIndex) {
     const candidateIndices = collectCandidateIndices(invertedIndex, rawQuery)
@@ -218,28 +221,55 @@ export function rankImagesByQuery(
 }
 
 // ── 全表扫描缓存，避免每次 HTTP 请求都打数据库 ──
-let _allImagesCacheTime = 0
-let _allImagesCache: CachedImage[] = []
-let _allImagesInvertedIndex: InvertedIndex | null = null
+interface ImageCache {
+  time: number
+  generation: number
+  images: CachedImage[]
+  index: InvertedIndex | null
+  pending?: Promise<ImageCache>
+}
+
+const caches = new WeakMap<object, ImageCache>()
+let cacheGeneration = 0
+
+export async function getImageSearchCache(ctx: Context): Promise<ImageCache> {
+  const key = ctx.database
+  let cache = caches.get(key)
+  if (!cache) {
+    cache = { time: 0, generation: -1, images: [], index: null }
+    caches.set(key, cache)
+  }
+  if (cache.generation === cacheGeneration && Date.now() - cache.time < ALL_IMAGES_CACHE_TTL) return cache
+  if (cache.pending) return cache.pending
+  const current = cache
+  current.pending = (async () => {
+    while (true) {
+      const generation = cacheGeneration
+      const rows = await ctx.database.get('memesluna_images', {})
+      if (generation !== cacheGeneration) continue
+      current.images = rows.map(toCachedImage)
+      current.index = current.images.length > SEARCH_INVERTED_INDEX_THRESHOLD
+        ? buildInvertedIndex(current.images) : null
+      current.time = Date.now()
+      current.generation = generation
+      return current
+    }
+
+  })()
+  try {
+    return await current.pending
+  } finally {
+    current.pending = undefined
+  }
+}
 
 export async function getAllImagesCached(ctx: Context): Promise<CachedImage[]> {
-  const now = Date.now()
-  if (now - _allImagesCacheTime < ALL_IMAGES_CACHE_TTL) return _allImagesCache
-  const rows = await ctx.database.get('memesluna_images', {})
-  _allImagesCache = rows.map(toCachedImage)
-  _allImagesCacheTime = now
-  // 大缓存时预建倒排索引；小缓存直接全扫更便宜
-  _allImagesInvertedIndex =
-    _allImagesCache.length > SEARCH_INVERTED_INDEX_THRESHOLD
-      ? buildInvertedIndex(_allImagesCache)
-      : null
-  return _allImagesCache
+  return (await getImageSearchCache(ctx)).images
 }
 
 /** 主动失效缓存（写操作后调用） */
 export function invalidateAllImagesCache() {
-  _allImagesCacheTime = 0
-  _allImagesInvertedIndex = null
+  cacheGeneration++
 }
 
 export async function findByQuery(
@@ -263,11 +293,9 @@ export async function findByQuery(
       invertedIndex = buildInvertedIndex(images)
     }
   } else {
-    images = await getAllImagesCached(ctx)
-    invertedIndex =
-      images.length > SEARCH_INVERTED_INDEX_THRESHOLD
-        ? buildInvertedIndex(images)
-        : null
+    const cache = await getImageSearchCache(ctx)
+    images = cache.images
+    invertedIndex = cache.index
   }
 
   if (!images.length) return null
@@ -276,7 +304,7 @@ export async function findByQuery(
   const qualified = ranked.filter((item) => item.score >= SEARCH_SCORE_THRESHOLD)
   if (!qualified.length) return null
 
-  const maxScore = Math.max(...qualified.map((item) => item.score))
+  const maxScore = qualified[0].score
   const topMatches = qualified.filter((item) => item.score === maxScore)
   const pick = topMatches[Math.floor(Math.random() * topMatches.length)]
   const resource = await service.getResourceByRow(pick.image)

@@ -16,7 +16,8 @@ import {
   AI_IMAGE_JPEG_QUALITY,
 } from './constants'
 import { getImageMimeFromBytes } from './image-format'
-import { normalizeMetadataList } from './utils'
+import { normalizeMetadataList, getDailyKey } from './utils'
+import { AnnotationScheduler, abortableDelay } from './annotation-scheduler'
 
 const tryParse = <T>(text: string): T | null => {
     try {
@@ -124,11 +125,20 @@ async function compressImageForAI(buffer: Buffer): Promise<{ buffer: Buffer; mim
 export class AIAnnotator {
     private _model: ComputedRef<ChatLunaChatModel> | null = null
     private usageTracker: AIUsageTracker
+    private cancellation = new AbortController()
+    private disposed = false
+    private scheduler = new AnnotationScheduler(() => this.config.aiConcurrency || 2)
+
+    get taskStats() { return this.scheduler.stats }
+
+    cancelPending() { this.cancellation.abort(); if (!this.disposed) this.cancellation = new AbortController() }
+    dispose() { this.disposed = true; this.cancellation.abort() }
 
     constructor(
         private ctx: Context,
         private config: Config
     ) {
+        ctx.on('dispose', () => this.dispose())
         this.usageTracker = new AIUsageTracker(
             ctx,
             config.aiDailyLimit,
@@ -156,6 +166,7 @@ export class AIAnnotator {
     }
 
     async initialize(): Promise<void> {
+        await this.usageTracker.initialize()
         if (!this.config.model) return
 
         try {
@@ -192,12 +203,8 @@ export class AIAnnotator {
         if (!this._model?.value) return null
         if (buffer.length === 0) return null
 
-        // 检查 AI 使用配额
-        const usageCheck = this.usageTracker.canUseAI()
-        if (!usageCheck.allowed) {
-            this.ctx.logger.warn(`AI 标注被拒绝: ${usageCheck.reason}`)
-            return null
-        }
+        const signal = this.cancellation.signal
+        if (signal.aborted) return null
 
         // 替换 prompt 模板中的上下文变量
         let prompt = this.config.annotatePrompt
@@ -217,15 +224,23 @@ export class AIAnnotator {
         const compressed = await compressImageForAI(buffer)
 
         for (let attempt = 0; attempt < this.config.aiMaxAttempts; attempt++) {
+            if (signal.aborted) return null
             if (attempt > 0) {
                 const delay =
                     this.config.aiBackoffBase * Math.pow(2, attempt)
-                await new Promise((resolve) => setTimeout(resolve, delay))
+                try { await abortableDelay(delay, signal) } catch { return null }
             }
 
             try {
                 const images = [{ data: compressed.buffer.toString('base64'), mimeType: compressed.mimeType }]
-                const result = await this._model.value.invoke([
+                let reserved = false
+                let day = getDailyKey()
+                const result = await this.scheduler.run(async (requestSignal) => {
+                    if (requestSignal.aborted) throw new Error('Annotation cancelled')
+                    if (!await this.usageTracker.reserveRequest(attempt > 0, (reservedDay) => { day = reservedDay })) throw new Error('AI daily request limit reached')
+                    reserved = true
+                    if (requestSignal.aborted) throw new Error('Annotation cancelled')
+                    return this._model!.value.invoke([
                     new SystemMessage(prompt),
                     new HumanMessage({
                         content: [
@@ -239,17 +254,20 @@ export class AIAnnotator {
                             }))
                         ]
                     })
-                ])
+                ], { signal: requestSignal, timeout: this.config.aiRequestTimeoutMs || 60000 })
+
+                }, signal, this.config.aiRequestTimeoutMs || 60000).catch(async (error) => {
+                    if (reserved) await this.usageTracker.recordResult(false, day)
+                    throw error
+                })
 
                 const parsed = this.parseResult(
                     getMessageContent(result.content)
                 )
-                if (parsed) {
-                    // 成功标注，记录使用次数
-                    this.usageTracker.recordUsage()
-                    return parsed
-                }
+                await this.usageTracker.recordResult(!!parsed, day)
+                if (parsed && !signal.aborted) return parsed
             } catch (error) {
+                if (signal.aborted || (error as Error).message === 'AI daily request limit reached') return null
                 this.ctx.logger.warn(
                     `AI标注失败 (attempt ${attempt + 1}/${this.config.aiMaxAttempts}):`,
                     error

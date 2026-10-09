@@ -24,6 +24,10 @@ npm i koishi-plugin-memesluna
 
 依赖服务：`database`、`server`、`chatluna`。Console 页面需要 `@koishijs/plugin-console`。
 
+管理操作还需要启用 Koishi `auth` 插件，并登录权限等级至少为 1 的 Console 账号。没有有效登录凭据时，管理 HTTP 接口和 Console RPC 会拒绝请求；公开图片、合集搜索与端点转发仍可匿名访问。
+
+自定义客户端调用 `/memesluna/api/admin/*` 时，使用 Console 登录得到的凭据发送 `Authorization: Bearer <token>`。不要把凭据放在 URL 中。内置 Console 已自动处理上传和暂缓区图片预览的鉴权。
+
 ## 基础配置
 
 | 配置项 | 说明 |
@@ -49,6 +53,12 @@ npm i koishi-plugin-memesluna
 
 - `tags`：语义标签（情绪、动作、场景等）
 - `aliases`：自然语言检索别名（用于 `?q=`）
+
+合集详情按页加载，每页同时返回图片和标注。批量追加标注由服务端合并已有数据，部分失败时会显示成功/失败数量，并保留失败项供重试。
+
+重复上传同一合集中已有的图片会复用原记录、文件名和标注。移动图片保留原文件名，发生重名时添加数字后缀；文件操作或数据库操作失败时会撤销未完成的操作。
+
+单张图片最大 50MB。HTTP 单次上传最多 32 个文件、总计不超过 100MB；内置 Console 将选择的文件逐张上传，单次选择最多 500 张。解析失败及上传失败都会清理该请求的临时文件。
 
 ## 路由说明
 
@@ -88,11 +98,17 @@ memesluna.untagall
 memesluna.untagall -c 合集名
 ```
 
+手动标注、上传后标注、归档和 `tagall` 使用同一任务队列及请求并发上限。Console 的「预览」页可以查看任务状态、每日用量并取消任务；取消会保留已完成的标注。
+
+`aiDailyLimit` 现在按实际请求次数计数，失败请求和重试也占用配额。请求次数、重试、成功与失败结果保存在 `data/memesluna/.ai-usage.json`，重启后继续使用，按 UTC 日期重置。`aiRequestTimeoutMs` 默认 60 秒；底层模型应支持取消信号，超时请求实际结束前仍占用并发槽位，后续等待也有超时限制。
+
 ## 自动收集与暂缓区
 
 开启 `autoCollect` 后监听群聊图片；窗口内出现次数达到阈值则进入暂缓区。
 
 主要配置：`emojiFrequencyWindowMinutes`、`emojiFrequencyThreshold`、`minEmojiSize` / `maxEmojiSize`、`groupAutoCollectLimit`、`similarityThreshold`、`stagingRetentionDays`。
+
+相似图片分组使用精确汉明距离候选检索，每个组成员都需要与该组代表图达到阈值。管理页显示成员与代表图的最低相似度；不会因为暂缓区超过 200 张而切换成会漏检的前缀分桶规则。
 
 暂缓区图片不参与随机路由，需在 Console 归档到合集后才生效。
 
@@ -111,6 +127,8 @@ npm run typecheck
 npm test
 npm run build
 ```
+
+新增回归测试覆盖并发上传、移动和删除失败回滚、启动文件名冲突、搜索规模边界、相似分组、管理鉴权、上传清理、前端分页和连续标注编辑，以及 AI 配额持久化与任务取消。
 
 发布物：`lib/**/*.js`、`lib/**/*.d.ts`、`dist`（Console 前端）。
 

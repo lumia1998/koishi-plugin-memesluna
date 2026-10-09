@@ -79,6 +79,43 @@ export interface ImageMetadataPayload {
   filename: string
   aliases?: string[]
   tags?: string[]
+  mode?: 'add' | 'replace'
+}
+
+export interface CollectionPageQuery {
+  offset?: number
+  limit?: number
+  type?: 'all' | 'local' | 'external'
+  search?: string
+  sort?: 'name' | 'nameDesc'
+  selected?: string[]
+}
+
+export interface CollectionResourceItem {
+  id: string
+  type: 'local' | 'external'
+  filename: string
+  value: string
+  tags: string[]
+  aliases: string[]
+}
+
+export interface CollectionResourcePage {
+  items: CollectionResourceItem[]
+  total: number
+  offset: number
+  limit: number
+}
+
+export interface AnnotationStatus {
+  pending: number
+  active: number
+  success: number
+  fail: number
+  skipped: number
+  cancelled: number
+  requests?: { active: number; pending: number }
+  usage?: { dailyCount: number; dailyLimit: number; remaining: number; requests: number; retries: number; successes: number; failures: number }
 }
 
 export interface ImageMetadataResult {
@@ -110,6 +147,9 @@ export interface MemesLunaConsoleEvents {
   'memesluna/annotateImage'(collectionName: string, filename: string): Promise<ImageMetadataResult>
   'memesluna/updateImageMetadata'(payload: ImageMetadataPayload): Promise<ImageMetadataResult>
   'memesluna/getImageMetadata'(collectionName: string, filename: string): Promise<ImageMetadataResult>
+  'memesluna/getCollectionResources'(collectionName: string, query?: CollectionPageQuery): Promise<CollectionResourcePage>
+  'memesluna/getAnnotationStatus'(): Promise<AnnotationStatus>
+  'memesluna/cancelAnnotations'(): Promise<boolean>
 }
 
 declare module '@koishijs/plugin-console' {

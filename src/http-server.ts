@@ -14,6 +14,8 @@ import {
 } from './utils'
 import { getLocalBaseUrl, toAbsoluteBaseUrl } from './urls'
 import formidable from 'formidable'
+import { adminHttpGuard } from './admin-auth'
+import { MAX_IMAGE_BYTES, MAX_UPLOAD_FILES, MAX_UPLOAD_TOTAL_BYTES } from './constants'
 
 async function applyDynamicForward(
   ctx: Context,
@@ -98,8 +100,8 @@ function getRequestBody(koa: any): Record<string, unknown> {
 
 async function buildAdminState(service: MemesLunaService) {
   const endpoints = await service.getEndpoints()
-  const collectionNames = await service.getCollections()
-  const collections = await Promise.all(collectionNames.map((name) => service.getCollectionInfo(name)))
+  const collections = await service.getCollectionInfos()
+  const collectionNames = collections.map((item) => item.name)
   const stagedImages = await service.getStagedImages()
 
   return {
@@ -115,12 +117,34 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
 
   const basePath = config.backendPath
 
-  ctx.server.get(`${basePath}/api/homepage-data`, async (koa) => {
+  const guard = adminHttpGuard(ctx)
+  const server = Object.fromEntries(['get', 'post', 'patch', 'delete'].map((method) => [method,
+    (route: string, handler: (koa: any) => Promise<void>) => {
+      if (!route.startsWith(`${basePath}/api/admin/`)) {
+        return (ctx.server as any)[method](route, handler)
+      }
+      const run = async (koa: any) => {
+        await service.ready
+        try { await handler(koa) }
+        catch (error) {
+          koa.status = 400
+          koa.body = { error: (error as Error).message || 'Operation failed' }
+        }
+      }
+      const handle = async (koa: any) => {
+        // Multipart 上传由下面的专用解析器负责，JSON 只在鉴权成功后解析。
+        if (method === 'post' && route.endsWith('/:name/images')) await run(koa)
+        else await (ctx.server as any)._body(koa, () => run(koa))
+      }
+      return (ctx.server as any)[method](route, guard, handle)
+    },
+  ])) as Record<'get' | 'post' | 'patch' | 'delete', (route: string, handler: (koa: any) => Promise<void>) => unknown>
+
+  server.get(`${basePath}/api/homepage-data`, async (koa) => {
     const baseUrl = toAbsoluteBaseUrl(ctx, config)
     const endpoints = await service.getEndpoints()
-    const collections = await service.getCollections()
-    const collectionInfos = await Promise.all(collections.map((name) => service.getCollectionInfo(name)))
-    const inventory = await service.buildRouteInventory(basePath)
+    const collectionInfos = await service.getCollectionInfos()
+    const inventory = await service.buildRouteInventory(basePath, { endpoints, collections: collectionInfos })
 
     const llmPrompt = getInjectVariablesPromptTemplate(config)
       .replaceAll('{endpoint}', inventory || '- 暂无可用路由')
@@ -138,11 +162,11 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     }
   })
 
-  ctx.server.get(`${basePath}/api/admin/state`, async (koa) => {
+  server.get(`${basePath}/api/admin/state`, async (koa) => {
     koa.body = await buildAdminState(service)
   })
 
-  ctx.server.post(`${basePath}/api/admin/collections`, async (koa) => {
+  server.post(`${basePath}/api/admin/collections`, async (koa) => {
     const body = getRequestBody(koa)
     const name = toTrimmedString(body.name)
     if (!name) {
@@ -165,7 +189,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     }
   })
 
-  ctx.server.delete(`${basePath}/api/admin/collections/:name`, async (koa) => {
+  server.delete(`${basePath}/api/admin/collections/:name`, async (koa) => {
     const name = toTrimmedString(koa.params.name)
     if (!name) {
       koa.status = 400
@@ -183,10 +207,10 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     koa.body = { ok: true }
   })
 
-  ctx.server.get(`${basePath}/api/admin/staged-images/similar`, async (koa) => {
+  server.get(`${basePath}/api/admin/staged-images/similar`, async (koa) => {
     koa.body = await service.getSimilarStagedImages(config.similarityThreshold)
   })
-  ctx.server.get(`${basePath}/api/admin/staged-images/:id`, async (koa) => {
+  server.get(`${basePath}/api/admin/staged-images/:id`, async (koa) => {
     const id = toTrimmedString(koa.params.id)
     const image = await service.getStagedImageBuffer(id)
     if (!image) {
@@ -200,7 +224,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     koa.body = image.buffer
   })
 
-  ctx.server.post(`${basePath}/api/admin/staged-images`, async (koa) => {
+  server.post(`${basePath}/api/admin/staged-images`, async (koa) => {
     const body = getRequestBody(koa)
     const base64 = toTrimmedString(body.base64)
     if (!base64) {
@@ -219,12 +243,12 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     koa.body = { ok: true, staged }
   })
 
-  ctx.server.delete(`${basePath}/api/admin/staged-images`, async (koa) => {
+  server.delete(`${basePath}/api/admin/staged-images`, async (koa) => {
     const deleted = await service.deleteAllStagedImages()
     koa.body = { ok: true, deleted }
   })
 
-  ctx.server.patch(`${basePath}/api/admin/collections/:name/description`, async (koa) => {
+  server.patch(`${basePath}/api/admin/collections/:name/description`, async (koa) => {
     const name = toTrimmedString(koa.params.name)
     const body = getRequestBody(koa)
     const description = toTrimmedString(body.description)
@@ -239,7 +263,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     koa.body = { ok: true }
   })
 
-  ctx.server.get(`${basePath}/api/admin/collections/:name/images/:filename`, async (koa) => {
+  server.get(`${basePath}/api/admin/collections/:name/images/:filename`, async (koa) => {
     const collectionName = toTrimmedString(koa.params.name)
     const filename = toTrimmedString(koa.params.filename)
 
@@ -255,7 +279,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     koa.body = image.buffer
   })
 
-  ctx.server.post(`${basePath}/api/admin/collections/:name/images`, async (koa) => {
+  server.post(`${basePath}/api/admin/collections/:name/images`, async (koa) => {
     const collectionName = toTrimmedString(koa.params.name)
     if (!collectionName) {
       koa.status = 400
@@ -263,105 +287,54 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
       return
     }
 
-    let fileList: any[] = []
-
-    // 1. Check if the upstream server middleware has already parsed the files
-    const request = koa.request as any
-    const parsedFiles = request.files || request.body?.files || request.body?.images
-
-    if (parsedFiles) {
-      const fileField = parsedFiles.images || parsedFiles.file || parsedFiles.files || parsedFiles
-      if (fileField) {
-        if (Array.isArray(fileField)) {
-          fileList.push(...fileField)
-        } else {
-          fileList.push(fileField)
-        }
-      }
-    } else {
-      // 2. If not pre-parsed by any upstream middleware, parse using formidable
-      const storageRoot = path.resolve(ctx.baseDir, 'data/memesluna')
-      const tempDir = path.join(storageRoot, '.temp_upload')
-      await fs.mkdir(tempDir, { recursive: true })
-
-      const form = formidable({
-        uploadDir: tempDir,
-        keepExtensions: true,
-        maxFileSize: 100 * 1024 * 1024, // 100MB
-        multiples: true,
-      })
-
-      try {
-        const [fields, files] = await new Promise<[any, any]>((resolve, reject) => {
-          form.parse(koa.req, (err, fields, files) => {
-            if (err) return reject(err)
-            resolve([fields, files])
-          })
-        })
-
-        const fileField = files.images || files.file || files.files
-        if (fileField) {
-          if (Array.isArray(fileField)) {
-            fileList.push(...fileField)
-          } else {
-            fileList.push(fileField)
-          }
-        }
-      } catch (err) {
-        koa.status = 400
-        koa.body = { error: (err as Error).message || 'Failed to parse upload stream' }
-        return
-      } finally {
-        await fs.rmdir(tempDir).catch(() => {})
-      }
-    }
-
-    if (!fileList.length) {
-      koa.status = 400
-      koa.body = { error: 'No images provided' }
+    if (!(koa.get('content-type') || '').toLowerCase().startsWith('multipart/form-data;')) {
+      koa.status = 415
+      koa.body = { error: 'multipart/form-data is required' }
       return
     }
-
+    const storageRoot = path.resolve(ctx.baseDir, 'data/memesluna')
+    await fs.mkdir(storageRoot, { recursive: true })
+    const tempDir = await fs.mkdtemp(path.join(storageRoot, '.temp_upload-'))
+    const form = formidable({
+      uploadDir: tempDir, keepExtensions: true, multiples: true,
+      maxFileSize: MAX_IMAGE_BYTES, maxFiles: MAX_UPLOAD_FILES,
+      maxTotalFileSize: MAX_UPLOAD_TOTAL_BYTES,
+    })
+    const uploaded: string[] = []
+    const failed: Array<{ filename: string; error: string }> = []
+    const rowsToAnnotate: any[] = []
     try {
-      const uploaded: string[] = []
-      const rowsToAnnotate: any[] = []
+      const files = await new Promise<formidable.Files>((resolve, reject) => {
+        form.parse(koa.req, (error, _fields, files) => error ? reject(error) : resolve(files))
+      })
+      const field = files.images || files.file || files.files
+      const fileList = Array.isArray(field) ? field : field ? [field] : []
+      if (!fileList.length) throw new Error('No images provided')
       for (const file of fileList) {
-        const filePath = file.filepath || file.path
-        const originalFilename = file.originalFilename || file.name || file.newFilename
-        if (!filePath) continue
-
-        const buffer = await fs.readFile(filePath)
-        const result = await service.addLocalImageBuffer(
-          collectionName,
-          buffer,
-          originalFilename
-        )
-        uploaded.push(result.filename)
-        rowsToAnnotate.push({
-          id: result.id,
-          collection: collectionName,
-          filename: result.filename,
-        })
-
-        // Delete temporary file
-        await fs.unlink(filePath).catch(() => {})
+        try {
+          const buffer = await fs.readFile(file.filepath)
+          const result = await service.addLocalImageBuffer(collectionName, buffer, file.originalFilename || undefined)
+          uploaded.push(result.filename)
+          rowsToAnnotate.push({ id: result.id, collection: collectionName, filename: result.filename })
+        } catch (error) {
+          failed.push({ filename: file.originalFilename || '', error: (error as Error).message })
+        }
       }
-
-      if (service.annotator && rowsToAnnotate.length > 0) {
-        void service.queueAnnotation(rowsToAnnotate)
+      if (service.annotator && rowsToAnnotate.length) {
+        void service.queueAnnotation(rowsToAnnotate).catch((error) => ctx.logger('memesluna').warn(error))
       }
-
-      koa.body = {
-        ok: true,
-        uploaded,
-      }
+      koa.status = uploaded.length ? 200 : 400
+      koa.body = { ok: failed.length === 0, uploaded, failed }
     } catch (error) {
       koa.status = 400
-      koa.body = { error: (error as Error).message || 'Failed to upload images' }
+      koa.body = { error: (error as Error).message || 'Failed to parse upload stream' }
+    } finally {
+      // 包括解析失败、单张失败和剩余未处理文件，不清理其他请求的目录。
+      await fs.rm(tempDir, { recursive: true, force: true })
     }
   })
 
-  ctx.server.delete(`${basePath}/api/admin/collections/:name/images/:filename`, async (koa) => {
+  server.delete(`${basePath}/api/admin/collections/:name/images/:filename`, async (koa) => {
     const collectionName = toTrimmedString(koa.params.name)
     const filename = toTrimmedString(koa.params.filename)
 
@@ -375,7 +348,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     koa.body = { ok: true }
   })
 
-  ctx.server.post(`${basePath}/api/admin/collections/:name/images/:filename/move`, async (koa) => {
+  server.post(`${basePath}/api/admin/collections/:name/images/:filename/move`, async (koa) => {
     const collectionName = toTrimmedString(koa.params.name)
     const filename = toTrimmedString(koa.params.filename)
     const body = getRequestBody(koa)
@@ -400,7 +373,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     }
   })
 
-  ctx.server.post(`${basePath}/api/admin/collections/:name/links`, async (koa) => {
+  server.post(`${basePath}/api/admin/collections/:name/links`, async (koa) => {
     const collectionName = toTrimmedString(koa.params.name)
     const body = getRequestBody(koa)
     const links = toStringArray(body.links)
@@ -415,7 +388,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     koa.body = { ok: true, added }
   })
 
-  ctx.server.delete(`${basePath}/api/admin/collections/:name/links`, async (koa) => {
+  server.delete(`${basePath}/api/admin/collections/:name/links`, async (koa) => {
     const collectionName = toTrimmedString(koa.params.name)
     const body = getRequestBody(koa)
     const link = toTrimmedString(body.link)
@@ -436,13 +409,13 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     koa.body = { ok: true }
   })
 
-  ctx.server.get(`${basePath}/api/admin/endpoints`, async (koa) => {
+  server.get(`${basePath}/api/admin/endpoints`, async (koa) => {
     koa.body = {
       endpoints: await service.getEndpoints(),
     }
   })
 
-  ctx.server.post(`${basePath}/api/admin/endpoints`, async (koa) => {
+  server.post(`${basePath}/api/admin/endpoints`, async (koa) => {
     const body = getRequestBody(koa)
 
     const name = toTrimmedString(body.name)
@@ -471,7 +444,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     }
   })
 
-  ctx.server.patch(`${basePath}/api/admin/endpoints/:name`, async (koa) => {
+  server.patch(`${basePath}/api/admin/endpoints/:name`, async (koa) => {
     const currentName = toTrimmedString(koa.params.name)
     const body = getRequestBody(koa)
 
@@ -492,7 +465,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     koa.body = { ok: true }
   })
 
-  ctx.server.delete(`${basePath}/api/admin/endpoints/:name`, async (koa) => {
+  server.delete(`${basePath}/api/admin/endpoints/:name`, async (koa) => {
     const name = toTrimmedString(koa.params.name)
     const deleted = await service.deleteEndpoint(name)
     if (!deleted) {
@@ -504,15 +477,15 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     koa.body = { ok: true }
   })
 
-  ctx.server.get(`${basePath}/admin`, async (koa) => {
+  server.get(`${basePath}/admin`, async (koa) => {
     koa.redirect('/console/memesluna')
   })
 
-  ctx.server.get(`${basePath}/admin/endpoint`, async (koa) => {
+  server.get(`${basePath}/admin/endpoint`, async (koa) => {
     koa.redirect('/console/memesluna')
   })
 
-  ctx.server.get(`${basePath}/api/collections/:name/resources`, async (koa) => {
+  server.get(`${basePath}/api/collections/:name/resources`, async (koa) => {
     const collectionName = koa.params.name
     const images = await service.getCollectionImages(collectionName)
     const links = await service.getCollectionLinks(collectionName)
@@ -523,7 +496,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     }
   })
 
-  ctx.server.get(`${basePath}/api/collections/:name/images/:filename`, async (koa) => {
+  server.get(`${basePath}/api/collections/:name/images/:filename`, async (koa) => {
     const collectionName = toTrimmedString(koa.params.name)
     const filename = toTrimmedString(koa.params.filename)
 
@@ -539,7 +512,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     koa.body = image.buffer
   })
 
-  ctx.server.get(`${basePath}/`, async (koa) => {
+  server.get(`${basePath}/`, async (koa) => {
     const query = typeof koa.request.query?.q === 'string' ? koa.request.query.q.trim() : ''
     if (query) {
       const result = await findByQuery(ctx, config, service, query, koa.request.origin)
@@ -550,7 +523,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     koa.redirect('/console/memesluna')
   })
 
-  ctx.server.get(`${basePath}/:name`, async (koa) => {
+  server.get(`${basePath}/:name`, async (koa) => {
     const routeName = koa.params.name as string
 
     if (isReservedPath(routeName)) {
@@ -572,7 +545,7 @@ export function applyServer(ctx: Context, config: Config, service: MemesLunaServ
     setKoaResponse(koa, result)
   })
 
-  ctx.server.get(`${basePath}/:name/:filename`, async (koa) => {
+  server.get(`${basePath}/:name/:filename`, async (koa) => {
     const collectionName = toTrimmedString(koa.params.name)
     const filename = toTrimmedString(koa.params.filename)
 

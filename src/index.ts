@@ -54,5 +54,5 @@ export * from './service'
 
 export const inject = {
   required: ['database', 'chatluna', 'server'],
-  optional: ['console'],
+  optional: ['console', 'auth'],
 }

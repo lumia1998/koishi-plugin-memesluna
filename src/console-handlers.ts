@@ -3,17 +3,14 @@ import path from 'path'
 import { Context } from 'koishi'
 import type { Config } from './config'
 import {
-  MAX_METADATA_ITEM_LENGTH,
-  MAX_METADATA_TAGS,
-} from './constants'
-import {
   type MemesLunaService,
 } from './service'
 import {
-  normalizeMetadataList,
   toTrimmedString,
 } from './utils'
 import { toAbsoluteBaseUrl } from './urls'
+import { ADMIN_AUTHORITY, requireConsoleAdmin } from './admin-auth'
+import type { ImageMetadataPayload, CollectionPageQuery } from './console-rpc'
 
 export function applyConsole(ctx: Context, config: Config, service: MemesLunaService) {
   if (!ctx.console) {
@@ -28,6 +25,13 @@ export function applyConsole(ctx: Context, config: Config, service: MemesLunaSer
   const devPath = path.resolve(consoleBase, 'client/index.ts')
   const prodPath = path.resolve(consoleBase, 'dist')
 
+  const addListener = (event: string, handler: (...args: any[]) => any) => {
+    consoleService.addListener(event, async function (this: any, ...args: any[]) {
+      await requireConsoleAdmin(ctx, this)
+      return handler(...args)
+    }, { authority: ADMIN_AUTHORITY })
+  }
+
   const withReady = <T extends unknown[], R>(handler: (...args: T) => Promise<R> | R) => {
     return async (...args: T): Promise<R> => {
       await service.ready
@@ -40,14 +44,11 @@ export function applyConsole(ctx: Context, config: Config, service: MemesLunaSer
     prod: prodPath,
   })
 
-  consoleService.addListener(
+  addListener(
     'memesluna/getState',
     withReady(async () => {
       const endpoints = await service.getEndpoints()
-      const collections = await service.getCollections()
-      const detailedCollections = await Promise.all(
-        collections.map(async (name) => service.getCollectionInfo(name))
-      )
+      const detailedCollections = await service.getCollectionInfos()
 
       const stagedImages = await service.getStagedImages()
       return {
@@ -59,42 +60,42 @@ export function applyConsole(ctx: Context, config: Config, service: MemesLunaSer
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/createCollection',
     withReady(async (name: string) => {
       return await service.createCollection(name)
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/deleteCollection',
     withReady(async (name: string) => {
       return await service.deleteCollection(name)
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/setCollectionDescription',
     withReady(async (name: string, description: string) => {
       return await service.setCollectionDescription(name, description)
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/deleteLocalImage',
     withReady(async (collectionName: string, filename: string) => {
       return await service.deleteImageFromCollection(collectionName, filename)
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/moveLocalImage',
     withReady(async (sourceCollection: string, targetCollection: string, filename: string) => {
       return await service.moveImageToCollection(sourceCollection, targetCollection, filename)
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/addLinks',
     withReady(async (collectionName: string, linksText: string) => {
       const links = linksText
@@ -105,48 +106,48 @@ export function applyConsole(ctx: Context, config: Config, service: MemesLunaSer
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/deleteLink',
     withReady(async (collectionName: string, link: string) => {
       return await service.removeLinkFromCollection(collectionName, link)
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/createEndpoint',
     withReady(async (payload: any) => {
       return await service.addEndpoint(payload)
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/updateEndpoint',
     withReady(async (name: string, payload: any) => {
       return await service.updateEndpoint(name, payload)
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/deleteEndpoint',
     withReady(async (name: string) => {
       return await service.deleteEndpoint(name)
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/getStagedImages',
     withReady(async () => {
       return await service.getStagedImages()
     })
   )
-  consoleService.addListener(
+  addListener(
     'memesluna/getSimilarStagedImages',
     withReady(async () => {
       return await service.getSimilarStagedImages(config.similarityThreshold)
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/addStagedImage',
     withReady(async (payload: any) => {
       return await service.addStagedImageBase64(
@@ -158,75 +159,55 @@ export function applyConsole(ctx: Context, config: Config, service: MemesLunaSer
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/deleteStagedImage',
     withReady(async (id: string) => {
       return await service.deleteStagedImage(id)
     })
   )
 
-  consoleService.addListener(
+  addListener(
     'memesluna/promoteStagedImage',
     withReady(async (id: string, collectionName: string) => {
       return await service.promoteStagedImage(id, collectionName)
     })
   )
-  consoleService.addListener('memesluna/getBaseUrl', async () => {
+  addListener('memesluna/getBaseUrl', async () => {
     return `${toAbsoluteBaseUrl(ctx, config)}${config.backendPath}`
   })
 
-  consoleService.addListener('memesluna/deleteAllStagedImages', withReady(async () => {
+  addListener('memesluna/deleteAllStagedImages', withReady(async () => {
     return await service.deleteAllStagedImages()
   }))
 
-  consoleService.addListener(
+  addListener(
     'memesluna/annotateImage',
     withReady(async (collectionName: string, filename: string) => {
-      const image = await service.getLocalImageBuffer(collectionName, filename)
-      if (!image) return { ok: false, error: '图片不存在' }
-
-      const annotator = service.annotator
-      if (!annotator) return { ok: false, error: 'AI 标注器未就绪' }
-
-      const result = await annotator.annotate(image.buffer, {
-        filename,
-        collectionName,
-        imageUrl: `${config.backendPath}/${encodeURIComponent(collectionName)}/${encodeURIComponent(filename)}`,
-      })
-      if (!result) return { ok: false, error: 'AI 标注失败' }
-
-      // Get the database row to find its ID
-      const rows = await ctx.database.get('memesluna_images', { collection: collectionName, filename })
-      if (!rows.length) return { ok: false, error: '数据库记录不存在' }
-
-      await service.updateImageAnnotation(rows[0].id, result.aliases, result.tags)
-      return { ok: true, aliases: result.aliases, tags: result.tags }
-    })
-  )
-
-  consoleService.addListener(
-    'memesluna/updateImageMetadata',
-    withReady(async (payload: { collectionName: string; filename: string; aliases?: string[]; tags?: string[] }) => {
-      const { collectionName, filename, aliases, tags } = payload
-      if (!collectionName || !filename) return { ok: false, error: '参数不完整' }
-
+      if (!service.annotator) return { ok: false, error: 'AI 标注器未就绪' }
       const rows = await ctx.database.get('memesluna_images', { collection: collectionName, filename })
       if (!rows.length) return { ok: false, error: '图片不存在' }
+      const outcome = await service.queueAnnotation(rows, { force: true })
+      if (!outcome.success) return { ok: false, error: 'AI 标注失败或任务已取消' }
+      const updated = await service.getImageById(rows[0].id)
+      if (!updated) return { ok: false, error: '图片已删除' }
+      return { ok: true, aliases: JSON.parse(updated.aliases || '[]'), tags: JSON.parse(updated.tags || '[]') }
 
-      const currentAliases: string[] = (() => { try { const p = JSON.parse(rows[0].aliases || '[]'); return Array.isArray(p) ? p : [] } catch { return [] } })()
-      const currentTags: string[] = (() => { try { const p = JSON.parse(rows[0].tags || '[]'); return Array.isArray(p) ? p : [] } catch { return [] } })()
-
-      const mergedAliases = aliases ?? currentAliases
-      const mergedTags = tags?.length
-        ? normalizeMetadataList(tags, MAX_METADATA_TAGS, MAX_METADATA_ITEM_LENGTH)
-        : (tags !== undefined ? [] : currentTags)
-
-      await service.updateImageAnnotation(rows[0].id, mergedAliases, mergedTags)
-      return { ok: true, aliases: mergedAliases, tags: mergedTags }
     })
   )
 
-  consoleService.addListener(
+  addListener(
+    'memesluna/updateImageMetadata',
+    withReady((payload: ImageMetadataPayload) => service.updateImageMetadata(payload))
+  )
+
+  addListener('memesluna/getAnnotationStatus', withReady(() => service.getAnnotationStatus()))
+  addListener('memesluna/cancelAnnotations', withReady(() => service.cancelAnnotations()))
+
+  addListener('memesluna/getCollectionResources', withReady((name: string, query?: CollectionPageQuery) => {
+    return service.getCollectionResourcePage(name, query)
+  }))
+
+  addListener(
     'memesluna/getImageMetadata',
     withReady(async (collectionName: string, filename: string) => {
       const rows = await ctx.database.get('memesluna_images', { collection: collectionName, filename })

@@ -93,6 +93,10 @@ export const MAX_METADATA_ITEM_LENGTH = 24
 
 // ==================== 文件处理相关 ====================
 
+export const MAX_IMAGE_BYTES = 50 * 1024 * 1024
+export const MAX_UPLOAD_FILES = 32
+export const MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024
+
 /**
  * AI 标注图片压缩阈值（字节）
  * 超过此大小的图片会被压缩后再发送给 AI

@@ -1,6 +1,7 @@
 import { Context } from 'koishi'
 import type { Config } from './config'
 import type { MemesLunaService } from './service'
+import { MEMESLUNA_IMAGES_UPDATED } from './service'
 import { toAbsoluteBaseUrl } from './urls'
 
 export function getInjectVariablesPromptTemplate(config: Config): string {
@@ -30,12 +31,29 @@ export function applyChatlunaVariables(ctx: Context, config: Config) {
     const service = ctx.memesluna
     await service.ready
 
-    const refresh = async () => {
-      await updateMemesVariable(ctx, config, service)
+    let pending: Promise<void> | undefined
+    let dirty = false
+    const refresh = () => {
+      dirty = true
+      if (pending) return pending
+      pending = (async () => {
+        while (dirty) {
+          dirty = false
+          await updateMemesVariable(ctx, config, service)
+        }
+      })().catch((error) => {
+        ctx.logger('memesluna').warn('Failed to refresh ChatLuna variables:', error)
+      }).finally(() => { pending = undefined })
+      return pending
     }
 
     await refresh()
     ctx.setInterval(refresh, config.variableRefreshIntervalMs)
+    let cancelRefresh: (() => void) | undefined
+    ;(ctx as any).on(MEMESLUNA_IMAGES_UPDATED, () => {
+      cancelRefresh?.()
+      cancelRefresh = ctx.setTimeout(() => { void refresh() }, 250)
+    })
 
     ctx.effect(() => () => {
       ;(ctx as any).chatluna.promptRenderer.removeVariable('endpoint')

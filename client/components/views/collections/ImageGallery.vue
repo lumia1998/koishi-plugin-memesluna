@@ -53,7 +53,7 @@
                 </div>
 
             <div class="gallery-tab-content">
-              <div v-if="!detailResources.images.length && !detailResources.links.length" class="empty-gallery">
+              <div v-if="!currentCollection.totalCount" class="empty-gallery">
                 表情包内尚无任何图片资源
               </div>
               <div v-else-if="!filteredGalleryItems.length" class="empty-gallery">
