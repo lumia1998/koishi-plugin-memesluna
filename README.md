@@ -22,7 +22,9 @@ MemesLuna 是 Koishi 的表情图片路由与管理插件。它把本地表情�
 npm i koishi-plugin-memesluna
 ```
 
-依赖服务：`database`、`server`、`chatluna`。Console 页面需要 `@koishijs/plugin-console`。
+依赖服务：`database`（必需）；`server` 提供 HTTP 路由，`chatluna` 提供变量注入与 AI 标注。Console 页面需要 `@koishijs/plugin-console`。
+
+聊天命令 `memesluna.stole`、`memesluna.tagall`、`memesluna.untagall` 需要权限等级 5。
 
 管理操作还需要启用 Koishi `auth` 插件，并登录权限等级至少为 1 的 Console 账号。没有有效登录凭据时，管理 HTTP 接口和 Console RPC 会拒绝请求；公开图片、合集搜索与端点转发仍可匿名访问。
 

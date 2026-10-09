@@ -1199,57 +1199,78 @@ body.dark .memesluna-app-layout {
 .notion-gallery-card:hover {
   box-shadow: none;
 }
-.notion-gallery-card.selected {
-  box-shadow: none;
-}
-.notion-gallery-card.selected .gallery-img-container {
-  box-shadow: inset 0 0 0 2px var(--k-color-primary, #2563eb);
-}
 .notion-gallery-card.external .gallery-img-container {
   background-color: var(--k-bg-card, #ffffff);
 }
-.gallery-select-toggle {
+/* 选择状态：方形裁剪 + 暗色蒙版 + 右上角序号 */
+.gallery-select-toggle,
+.staging-select-toggle {
   position: absolute;
-  top: 9px;
-  left: 9px;
+  top: 8px;
+  right: 8px;
   z-index: 12;
-  width: 24px;
-  height: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.82);
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 2px solid #ffffff;
   border-radius: 999px;
-  background-color: var(--memesluna-floating-action-bg);
-  box-shadow: none;
-  color: var(--k-color-primary, #2383e2);
+  background-color: rgba(0, 0, 0, 0.28);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  color: #ffffff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+}
+.gallery-select-toggle:hover,
+.staging-select-toggle:hover {
+  background-color: rgba(0, 0, 0, 0.45);
+  transform: scale(1.06);
+}
+.gallery-select-toggle.checked,
+.staging-select-toggle.checked {
+  border-color: var(--memesluna-primary, #2383e2);
+  background-color: var(--memesluna-primary, #2383e2);
+}
+.gallery-select-toggle:focus-visible,
+.staging-select-toggle:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+}
+.gallery-img-container::after,
+.staging-image-shell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.5);
   opacity: 0;
-  transition: opacity 0.12s ease, border-color 0.12s ease;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
 }
-.gallery-select-toggle svg {
-  width: 14px;
-  height: 14px;
-}
-.notion-gallery-card:hover .gallery-select-toggle,
-.notion-gallery-card.selected .gallery-select-toggle {
+.notion-gallery-card.selected .gallery-img-container::after,
+.staging-card-selected .staging-image-shell::after {
   opacity: 1;
 }
 .gallery-img-container {
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 1 / 1;
   background-color: var(--memesluna-image-preview-bg, #ffffff);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   position: relative;
-  box-shadow: inset 0 0 0 1px var(--memesluna-border, rgba(15, 23, 42, 0.08));
 }
 .gallery-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
 }
 .image-format-badge {
   position: absolute;
@@ -1774,43 +1795,6 @@ body.dark .memesluna-app-layout {
 }
 .staging-card-selected {
   border-color: var(--memesluna-primary);
-  box-shadow: 0 0 0 2px var(--memesluna-focus-ring);
-}
-.staging-select-toggle {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  z-index: 5;
-  width: 24px;
-  height: 24px;
-  border-radius: 999px;
-  border: 1px solid var(--memesluna-border-strong);
-  background-color: var(--memesluna-floating-action-bg);
-  color: var(--memesluna-primary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  padding: 0;
-  box-shadow: none;
-  opacity: 0.92;
-  transition: background-color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
-}
-.staging-card:hover .staging-select-toggle,
-.staging-card-selected .staging-select-toggle {
-  opacity: 1;
-}
-.staging-select-toggle:hover {
-  background-color: var(--memesluna-bg-panel);
-  border-color: var(--memesluna-primary);
-}
-.staging-card-selected .staging-select-toggle {
-  border-color: var(--memesluna-primary);
-  background-color: var(--memesluna-primary-soft-bg);
-}
-.staging-select-toggle svg {
-  width: 14px;
-  height: 14px;
 }
 .staging-batch-toolbar {
   display: flex;
@@ -1824,8 +1808,11 @@ body.dark .memesluna-app-layout {
   background-color: var(--memesluna-floating-action-bg);
 }
 .staging-image-shell {
+  position: relative;
   width: 100%;
   aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 8px 8px 0 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1838,7 +1825,7 @@ body.dark .memesluna-app-layout {
 .staging-image {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   display: block;
 }
 .staging-card-body {

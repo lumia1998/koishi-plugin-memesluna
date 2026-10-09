@@ -39,8 +39,7 @@ export function apply(ctx: Context, config: Config) {
   if (config.model) {
     ctx.inject(['memesluna', 'chatluna'], async (ctx) => {
       const annotator = new AIAnnotator(ctx, config)
-      await annotator.initialize()
-      ctx.memesluna.setAnnotator(annotator)
+      if (await annotator.initialize()) ctx.memesluna.setAnnotator(annotator)
     })
   }
 
@@ -53,6 +52,6 @@ export * from './config'
 export * from './service'
 
 export const inject = {
-  required: ['database', 'chatluna', 'server'],
-  optional: ['console', 'auth'],
+  required: ['database'],
+  optional: ['server', 'console', 'auth', 'chatluna'],
 }

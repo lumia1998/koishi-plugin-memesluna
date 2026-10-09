@@ -104,4 +104,13 @@ describe('AI 配额及调度', () => {
     expect(await old).toMatchObject({ cancelled: 3 })
     expect(await queue.enqueue([4], 1, async () => 'success', 0)).toMatchObject({ success: 1 })
   })
+  it('手动单张标注不排在未完成的批量任务之后', async () => {
+    const queue = new AnnotationQueue()
+    let finish: () => void
+    const batch = queue.enqueue([1], 1, () => new Promise<'success'>((resolve) => { finish = () => resolve('success') }), 0)
+    await Promise.resolve()
+    expect(await queue.enqueue([2], 1, async () => 'success', 0, undefined, undefined, true)).toMatchObject({ success: 1 })
+    finish!()
+    expect(await batch).toMatchObject({ success: 1 })
+  })
 })

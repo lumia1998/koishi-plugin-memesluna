@@ -282,6 +282,8 @@ export class MemesLunaService extends Service {
 
   async queueAnnotation(rows: any[], options?: {
     force?: boolean
+    /** 手动单张标注不等待已排队的批量任务。 */
+    immediate?: boolean
     onProgress?: (success: number, fail: number) => void | Promise<void>
   }): Promise<{ success: number; fail: number; skipped: number; cancelled: number }> {
     if (!this._annotator || !rows.length) return { success: 0, fail: 0, skipped: 0, cancelled: 0 }
@@ -301,7 +303,7 @@ export class MemesLunaService extends Service {
       if (signal.aborted) return 'cancelled'
       if (!result) return 'fail'
       return await this.updateImageAnnotation(stored.id, result.aliases, result.tags) ? 'success' : 'skipped'
-    }, this.config.aiBatchDelay || 0, options?.onProgress, (error) => this.ctx.logger('memesluna').warn('Annotation task failed:', error))
+    }, this.config.aiBatchDelay || 0, options?.onProgress, (error) => this.ctx.logger('memesluna').warn('Annotation task failed:', error), options?.immediate)
   }
 
 
@@ -888,15 +890,12 @@ export class MemesLunaService extends Service {
 
   private async deleteCollectionUnlocked(collectionName: string): Promise<boolean> {
     this.ensureCollectionName(collectionName)
-    const dir = this.getCollectionDir(collectionName)
-    try {
-      if (!(await this.collectionExists(collectionName))) return false
-      await removeWithRollback(this.getStorageRoot(), dir, () => this.ctx.database.remove('memesluna_images', { collection: collectionName }))
-      this.notifyImagesChanged()
-      return true
-    } catch {
-      return false
-    }
+    if (!(await this.collectionExists(collectionName))) return false
+    // 文件或数据库失败需要让调用方看到真实错误，而不是当作“不存在”。
+    await removeWithRollback(this.getStorageRoot(), this.getCollectionDir(collectionName),
+      () => this.ctx.database.remove('memesluna_images', { collection: collectionName }))
+    this.notifyImagesChanged()
+    return true
   }
 
   private isImageFile(filename: string): boolean {
@@ -911,21 +910,6 @@ export class MemesLunaService extends Service {
     }
     if (!this.isImageFile(normalized)) {
       throw new Error('Invalid image filename')
-    }
-    return normalized
-  }
-
-  private isStagedImageFile(filename: string): boolean {
-    return this.isImageFile(filename)
-  }
-
-  private ensureSafeStagedImageFilename(filename: string): string {
-    const normalized = path.basename(filename || '')
-    if (!filename || normalized !== filename || filename.includes('/') || filename.includes('\\')) {
-      throw new Error('Invalid staged image filename')
-    }
-    if (!this.isStagedImageFile(normalized)) {
-      throw new Error('Invalid staged image filename')
     }
     return normalized
   }
@@ -994,30 +978,6 @@ export class MemesLunaService extends Service {
     } catch {
       return null
     }
-  }
-
-  async getCollectionImages(collectionName: string): Promise<string[]> {
-    if (!this.isValidCollectionName(collectionName)) {
-      return []
-    }
-    if (!(await this.collectionExists(collectionName))) {
-      return []
-    }
-
-    const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName, type: 'local' })
-    return rows.map((img) => img.filename).sort()
-  }
-
-  async getCollectionLinks(collectionName: string): Promise<string[]> {
-    if (!this.isValidCollectionName(collectionName)) {
-      return []
-    }
-    if (!(await this.collectionExists(collectionName))) {
-      return []
-    }
-
-    const rows = await this.ctx.database.get('memesluna_images', { collection: collectionName, type: 'external' })
-    return rows.map((img) => img.value)
   }
 
   async addLinksToCollection(collectionName: string, links: string[]): Promise<number> {
@@ -1109,17 +1069,6 @@ export class MemesLunaService extends Service {
     return { base64: trimmed }
   }
 
-  private buildSafeFilename(originalName: string | undefined, extHint: string | undefined): string {
-    const numericName = `${Date.now()}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`
-    const src = (originalName ?? '').trim()
-    const parsed = path.parse(src)
-    const rawExt = (parsed.ext || (extHint ? `.${extHint}` : '') || '.png').toLowerCase()
-    const normalizedExt = rawExt === '.jpeg' ? '.jpg' : rawExt
-    const finalExt = IMAGE_EXTENSIONS.has(normalizedExt) ? normalizedExt : '.png'
-
-    return `${numericName}${finalExt}`
-  }
-
   private isAvifBuffer(buffer: Buffer): boolean {
     return buffer.length >= 12 && buffer.toString('ascii', 4, 12) === 'ftypavif'
   }
@@ -1133,7 +1082,7 @@ export class MemesLunaService extends Service {
   }
 
   private resolveStagedImagePath(filename: string): string {
-    return path.join(this.getStagingDir(), this.ensureSafeStagedImageFilename(filename))
+    return path.join(this.getStagingDir(), this.ensureSafeImageFilename(filename))
   }
 
   private async deduplicateDatabaseFilename(collectionName: string, filename: string): Promise<string> {
@@ -1548,11 +1497,6 @@ export class MemesLunaService extends Service {
   }
 
 
-  async getCollectionInfo(collectionName: string): Promise<CollectionInfo | null> {
-    if (!this.isValidCollectionName(collectionName) || !(await this.collectionExists(collectionName))) return null
-    return (await this.getCollectionInfos([collectionName]))[0] || null
-  }
-
   async getCollectionInfos(names?: string[]): Promise<CollectionInfo[]> {
     const collections = names || await this.getCollections()
     if (!collections.length) return []
@@ -1569,7 +1513,9 @@ export class MemesLunaService extends Service {
     const result = new Map<string, CollectionInfo>()
     await mapPool(collections, BACKFILL_CONCURRENCY, async (name) => {
       const summary = summaries.get(name) || { local: 0, external: 0, first: Infinity, last: 0 }
-      const stat = await fs.stat(this.getCollectionDir(name))
+      // 合集可能在列举后被并发删除，跳过即可，不应让整个列表失败。
+      const stat = await fs.stat(this.getCollectionDir(name)).catch(() => null)
+      if (!stat) return
       result.set(name, {
         name, description: await this.getCollectionDescription(name),
         localCount: summary.local, linkCount: summary.external, totalCount: summary.local + summary.external,
@@ -1577,7 +1523,7 @@ export class MemesLunaService extends Service {
         createdAt: new Date(Math.min(summary.first, stat.birthtimeMs)), updatedAt: new Date(Math.max(summary.last, stat.mtimeMs)),
       })
     })
-    return collections.map((name) => result.get(name)!)
+    return collections.map((name) => result.get(name)).filter((info): info is CollectionInfo => !!info)
   }
 
 
@@ -1726,10 +1672,8 @@ export class MemesLunaService extends Service {
     return true
   }
 
-  async buildRouteInventory(backendPath: string, data?: { endpoints: ApiEndpoint[]; collections: CollectionInfo[] }): Promise<string> {
-    const [endpoints, collections] = await Promise.all([
-      data?.endpoints || this.getEndpoints(), data?.collections || this.getCollectionInfos(),
-    ])
+  async buildRouteInventory(backendPath: string): Promise<string> {
+    const [endpoints, collections] = await Promise.all([this.getEndpoints(), this.getCollectionInfos()])
 
     const sections: string[] = []
 

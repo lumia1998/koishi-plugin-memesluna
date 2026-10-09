@@ -31,6 +31,17 @@ describe('isPrivateIP', () => {
     expect(isPrivateIP('fd00::1')).toBe(true)
   })
 
+  it('应该识别带方括号、未指定及 IPv4 映射的地址', () => {
+    expect(isPrivateIP(new URL('http://[::1]/').hostname)).toBe(true)
+    expect(isPrivateIP(new URL('http://[::ffff:127.0.0.1]/').hostname)).toBe(true)
+    expect(isPrivateIP(new URL('http://[::ffff:c0a8:101]/').hostname)).toBe(true)
+    expect(isPrivateIP(new URL('http://0.0.0.0/').hostname)).toBe(true)
+    expect(isPrivateIP(new URL('http://127.1/').hostname)).toBe(true)
+    expect(isPrivateIP(new URL('http://[fd12::1]/').hostname)).toBe(true)
+    expect(isPrivateIP(new URL('http://[::ffff:8.8.8.8]/').hostname)).toBe(false)
+    expect(isPrivateIP(new URL('http://[2001:4860::8888]/').hostname)).toBe(false)
+  })
+
   it('应该允许公网地址', () => {
     expect(isPrivateIP('8.8.8.8')).toBe(false)
     expect(isPrivateIP('1.1.1.1')).toBe(false)

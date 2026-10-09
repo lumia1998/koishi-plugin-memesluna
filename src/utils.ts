@@ -72,14 +72,3 @@ export function getDailyKey(timestamp = Date.now()): string {
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
-
-/**
- * 安全地解析 JSON，返回默认值
- */
-export function safeJsonParse<T>(value: string, defaultValue: T): T {
-  try {
-    return JSON.parse(value) as T
-  } catch {
-    return defaultValue
-  }
-}

@@ -11,8 +11,9 @@ export class AnnotationQueue {
   cancel() { this.cancellation.abort(); this.cancellation = new AbortController() }
   dispose() { this.closed = true; this.cancellation.abort() }
 
+  /** immediate 任务不排在已入队批次之后，但仍共享取消信号和请求并发上限。 */
   enqueue<T>(rows: T[], concurrency: number, process: (row: T, signal: AbortSignal) => Promise<Outcome>, delay: number,
-    progress?: (success: number, fail: number) => void | Promise<void>, onError?: (error: unknown) => void) {
+    progress?: (success: number, fail: number) => void | Promise<void>, onError?: (error: unknown) => void, immediate = false) {
     const signal = this.cancellation.signal
     this.stats.pending += rows.length
     const run = async () => {
@@ -35,6 +36,7 @@ export class AnnotationQueue {
       }))
       return result
     }
+    if (immediate) return run()
     const next = this.chain.then(run, run)
     this.chain = next.catch(() => {})
     return next

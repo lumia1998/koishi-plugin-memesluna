@@ -80,5 +80,4 @@ export class AIUsageTracker {
     }
   }
 
-  updateConfig(dailyLimit: number, warnThreshold: number) { this.dailyLimit = dailyLimit; this.warnThreshold = warnThreshold }
 }

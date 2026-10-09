@@ -157,17 +157,10 @@ export class AIAnnotator {
         return this.usageTracker.getStats()
     }
 
-    /**
-     * 更新配置
-     */
-    updateConfig(config: Config): void {
-        this.config = config
-        this.usageTracker.updateConfig(config.aiDailyLimit, config.aiWarnThreshold)
-    }
-
-    async initialize(): Promise<void> {
+    /** 返回模型是否加载成功；失败时调用方不应挂载标注器。 */
+    async initialize(): Promise<boolean> {
         await this.usageTracker.initialize()
-        if (!this.config.model) return
+        if (!this.config.model) return false
 
         try {
             const [platform] = parseRawModelName(this.config.model)
@@ -176,8 +169,10 @@ export class AIAnnotator {
                 this.config.model
             )
             this.ctx.logger.success('AI标注模型加载成功')
+            return true
         } catch (error) {
             this.ctx.logger.error('AI标注模型加载失败:', error)
+            return false
         }
     }
 
@@ -227,7 +222,7 @@ export class AIAnnotator {
             if (signal.aborted) return null
             if (attempt > 0) {
                 const delay =
-                    this.config.aiBackoffBase * Math.pow(2, attempt)
+                    this.config.aiBackoffBase * Math.pow(2, attempt - 1)
                 try { await abortableDelay(delay, signal) } catch { return null }
             }
 

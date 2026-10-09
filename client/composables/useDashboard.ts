@@ -206,14 +206,6 @@ export function useDashboard() {
     return imageTagsCache.value[getImageCacheKey(currentCollection.value.name, filename)] || []
   }
 
-  function getVisibleImageTags(filename: string): string[] {
-    return getImageTags(filename).slice(0, 6)
-  }
-
-  function getHiddenImageTagsCount(filename: string): number {
-    return Math.max(0, getImageTags(filename).length - getVisibleImageTags(filename).length)
-  }
-
   const TAG_PALETTE_LIGHT = ['#f97316','#ec4899','#8b5cf6','#06b6d4','#22c55e','#eab308','#f43f5e','#14b8a6','#a855f7','#3b82f6']
   // Brighter palette for dark backgrounds to keep badge text readable
   const TAG_PALETTE_DARK = ['#fb923c','#f472b6','#a78bfa','#22d3ee','#4ade80','#facc15','#fb7185','#2dd4bf','#c084fc','#60a5fa']
@@ -342,16 +334,7 @@ export function useDashboard() {
     aiAnnotating.value = false
   }
 
-  const activeMoveDropdown = ref<string | null>(null)
   const activeCardMenu = ref<string | null>(null)
-
-  function toggleMoveDropdown(img: string) {
-    if (activeMoveDropdown.value === img) {
-      activeMoveDropdown.value = null
-    } else {
-      activeMoveDropdown.value = img
-    }
-  }
 
   function toggleCardMenu(img: string) {
     if (activeCardMenu.value === img) {
@@ -367,6 +350,12 @@ export function useDashboard() {
 
   function isImageSelected(img: string): boolean {
     return selectedImageSet.value.has(img)
+  }
+
+  // Set 保留插入顺序，序号即用户的选择顺序。
+  const imageSelectionOrder = computed(() => new Map(Array.from(selectedImageSet.value, (name, index) => [name, index + 1])))
+  function getImageSelectionIndex(img: string): number {
+    return imageSelectionOrder.value.get(img) || 0
   }
 
   function toggleImageSelection(img: string) {
@@ -534,6 +523,11 @@ export function useDashboard() {
 
   function isStagedSelected(id: string): boolean {
     return selectedStagedIds.value.has(id)
+  }
+
+  const stagedSelectionOrder = computed(() => new Map(Array.from(selectedStagedIds.value, (id, index) => [id, index + 1])))
+  function getStagedSelectionIndex(id: string): number {
+    return stagedSelectionOrder.value.get(id) || 0
   }
 
   function toggleStagedSelection(id: string) {
@@ -725,11 +719,6 @@ export function useDashboard() {
 
   function getCollectionCardPreviewImages(name: string): string[] {
     return getCollectionPreviewImages(name).slice(0, 6)
-  }
-
-  function getCollectionPreviewCountClass(name: string): string {
-    const count = Math.min(getCollectionPreviewImages(name).length, 9)
-    return count ? `preview-count-${count}` : 'preview-count-0'
   }
 
   async function loadCollectionPreview(collection: CollectionInfo) {
@@ -1432,7 +1421,6 @@ export function useDashboard() {
   }
 
   const closeDropdowns = () => {
-    activeMoveDropdown.value = null
     activeCollectionMenu.value = null
     activeCardMenu.value = null
   }
@@ -1492,23 +1480,18 @@ export function useDashboard() {
     activeMenu,
     loading,
     backendPath,
-    baseUrl,
     endpoints,
     collections,
     stagedImages,
     stagingSearch,
-    stagingTargetCollection,
     stagingBusyId,
     stagingViewMode,
-    similarGroups,
     similarLoading,
     similarMessage,
     selectedStagedIds,
     showEndpointEditor,
     editingEndpoint,
     endpointForm,
-    failedEndpointPreviewIds,
-    newCollectionName,
     currentCollection,
     collectionSearchQuery,
     collectionFilter,
@@ -1516,7 +1499,6 @@ export function useDashboard() {
     newDescription,
     externalLinksText,
     detailResources,
-    collectionPreviews,
     currentGalleryTab,
     showImportLinks,
     selectedImageSet,
@@ -1537,7 +1519,6 @@ export function useDashboard() {
     tagEditorSaving,
     aiAnnotating,
     imageTagsCache,
-    imageAliasesCache,
     bulkTagEditorVisible,
     bulkTagEditorTags,
     bulkTagEditorAliases,
@@ -1551,13 +1532,7 @@ export function useDashboard() {
     addAliasToBulkEditor,
     removeAliasFromBulkEditor,
     saveBulkTagEditor,
-    getImageCacheKey,
     getImageTags,
-    getVisibleImageTags,
-    getHiddenImageTagsCount,
-    TAG_PALETTE: TAG_PALETTE_LIGHT,
-    TAG_PALETTE_LIGHT,
-    TAG_PALETTE_DARK,
     tagColor,
     openTagEditor,
     addTagFromEditor,
@@ -1567,22 +1542,18 @@ export function useDashboard() {
     triggerAIAnnotation,
     saveTagEditor,
     closeTagEditor,
-    activeMoveDropdown,
     activeCardMenu,
-    toggleMoveDropdown,
     toggleCardMenu,
     closeCardMenu,
     isImageSelected,
+    getImageSelectionIndex,
     toggleImageSelection,
     clearSelectedImages,
     toggleSelectCurrentPage,
     handleGalleryItemClick,
     currentPage,
-    pageSize,
-    galleryItems,
     filteredGalleryItems,
     totalPages,
-    galleryTotal,
     paginatedGalleryItems,
     selectedImages,
     areAllCurrentPageImagesSelected,
@@ -1595,9 +1566,9 @@ export function useDashboard() {
     filteredStagedImages,
     filteredSimilarGroups,
     similarStagedImages,
-    selectedStagedImages,
     areAllCurrentPageStagedSelected,
     isStagedSelected,
+    getStagedSelectionIndex,
     toggleStagedSelection,
     toggleSelectAllStaged,
     clearSelectedStaged,
@@ -1608,37 +1579,24 @@ export function useDashboard() {
     dragOver,
     fileInput,
     toast,
-    toastTimer,
-    showToast,
     switchMainMenu,
-    getBackendBaseUrl,
     getRouteDisplayPath,
     getBaseRedirectUrl,
-    getLocalImageApiUrl,
     getStagedImageUrl,
     handlePreviewImageError,
     formatDate,
     formatPercent,
     formatSize,
     getImageExtension,
-    getExternalLinkLabel,
     getCollectionPreviewState,
-    getCollectionPreviewImages,
     getCollectionCardPreviewImages,
-    getCollectionPreviewCountClass,
-    loadCollectionPreview,
-    warmCollectionPreviews,
-    fetchState,
     fetchSettingsPreview,
     refreshStagedImages,
-    loadSimilarStagedImages,
     toggleSimilarStagingMode,
     promoteStagedImage,
     deleteStagedImage,
-    stageFilteredFiles,
     openEndpointEditor,
     closeEndpointEditor,
-    resetEndpointForm,
     editEndpoint,
     saveEndpoint,
     deleteEndpoint,
@@ -1647,15 +1605,12 @@ export function useDashboard() {
     confirmDeleteCollection,
     enterCollectionDetail,
     exitCollectionDetail,
-    loadCollectionResources,
     refreshCollectionResources,
     testCurrentCollectionApi,
     saveCollectionDescription,
     triggerFileInput,
     onFileSelected,
     onDrop,
-    uploadFiles,
-    fileToBase64,
     addExternalLinks,
     deleteExternalLink,
     confirmDeleteImage,
@@ -1664,6 +1619,5 @@ export function useDashboard() {
     moveSelectedImages,
     openImage,
     toggleCollectionMenu,
-    closeDropdowns,
   }
 }

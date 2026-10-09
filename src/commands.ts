@@ -2,6 +2,10 @@ import { Context, h } from 'koishi'
 import type { Config } from './config'
 import { downloadImage } from './download'
 import { getExtFromMagicBytes } from './image-format'
+import { parseJsonStringArray } from './utils'
+
+/** 会写入或批量修改图库的命令所需权限。 */
+const MANAGE_AUTHORITY = 5
 
 export function registerCommands(ctx: Context, config: Config) {
   const root = ctx.command('memesluna', 'MemesLuna 命令')
@@ -112,13 +116,13 @@ export function registerCommands(ctx: Context, config: Config) {
   }
 
   root
-    .subcommand('.stole <name:string>', '偷取引用消息中的图片并存入指定表情包')
+    .subcommand('.stole <name:string>', '偷取引用消息中的图片并存入指定表情包', { authority: MANAGE_AUTHORITY })
     .action(async ({ session }, name) => {
       return await stoleAction(session, name)
     })
 
   root
-    .subcommand('.tagall', '批量为以往的图片自动进行 AI 语义打标', { authority: 3 })
+    .subcommand('.tagall', '批量为以往的图片自动进行 AI 语义打标', { authority: MANAGE_AUTHORITY })
     .option('force', '-f 强制为已打标的图片重新进行 AI 标注')
     .action(async ({ session, options }) => {
       const service = ctx.memesluna
@@ -131,20 +135,8 @@ export function registerCommands(ctx: Context, config: Config) {
       // 批量 AI 标注只处理实际保存在本地合集目录中的图片。
       // 外链图片仍可用于路由分发，但不应计入 tagall 的处理数量。
       const localImages = images.filter((img) => img.type === 'local')
-      const taggedLocalCount = localImages.filter((img) => {
-        try {
-          const tags = JSON.parse(img.tags || '[]')
-          return Array.isArray(tags) && tags.length > 0
-        } catch {
-          return false
-        }
-      }).length
-      const targets = localImages.filter((img) => {
-        if (force) return true
-        let tags: string[] = []
-        try { const p = JSON.parse(img.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
-        return tags.length === 0
-      })
+      const taggedLocalCount = localImages.filter((img) => parseJsonStringArray(img.tags).length > 0).length
+      const targets = force ? localImages : localImages.filter((img) => parseJsonStringArray(img.tags).length === 0)
 
       if (targets.length === 0) {
         return localImages.length > 0
@@ -173,7 +165,7 @@ export function registerCommands(ctx: Context, config: Config) {
     })
 
   root
-    .subcommand('.untagall', '一键清空表情图片的标签', { authority: 3 })
+    .subcommand('.untagall', '一键清空表情图片的标签', { authority: MANAGE_AUTHORITY })
     .alias('.cleartags')
     .option('collection', '-c <collection:string> 仅清空指定合集的图片标签')
     .action(async ({ session, options }) => {
@@ -190,11 +182,7 @@ export function registerCommands(ctx: Context, config: Config) {
       }
 
       const images = await ctx.database.get('memesluna_images', filter)
-      const targets = images.filter((img) => {
-        let tags: string[] = []
-        try { const p = JSON.parse(img.tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
-        return tags.length > 0
-      })
+      const targets = images.filter((img) => parseJsonStringArray(img.tags).length > 0)
 
       if (targets.length === 0) {
         return '没有发现需要清空标签的图片。'

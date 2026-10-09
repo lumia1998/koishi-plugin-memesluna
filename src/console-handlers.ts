@@ -6,6 +6,7 @@ import {
   type MemesLunaService,
 } from './service'
 import {
+  parseJsonStringArray,
   toTrimmedString,
 } from './utils'
 import { toAbsoluteBaseUrl } from './urls'
@@ -186,12 +187,12 @@ export function applyConsole(ctx: Context, config: Config, service: MemesLunaSer
       if (!service.annotator) return { ok: false, error: 'AI 标注器未就绪' }
       const rows = await ctx.database.get('memesluna_images', { collection: collectionName, filename })
       if (!rows.length) return { ok: false, error: '图片不存在' }
-      const outcome = await service.queueAnnotation(rows, { force: true })
+      // 手动单张标注不排在后台批量任务之后。
+      const outcome = await service.queueAnnotation(rows, { force: true, immediate: true })
       if (!outcome.success) return { ok: false, error: 'AI 标注失败或任务已取消' }
       const updated = await service.getImageById(rows[0].id)
       if (!updated) return { ok: false, error: '图片已删除' }
-      return { ok: true, aliases: JSON.parse(updated.aliases || '[]'), tags: JSON.parse(updated.tags || '[]') }
-
+      return { ok: true, aliases: parseJsonStringArray(updated.aliases), tags: parseJsonStringArray(updated.tags) }
     })
   )
 
@@ -212,15 +213,8 @@ export function applyConsole(ctx: Context, config: Config, service: MemesLunaSer
     withReady(async (collectionName: string, filename: string) => {
       const rows = await ctx.database.get('memesluna_images', { collection: collectionName, filename })
       if (!rows.length) return { ok: false, error: '图片不存在' }
-
-      let aliases: string[] = []
-      let tags: string[] = []
-      try { const p = JSON.parse(rows[0].aliases || '[]'); aliases = Array.isArray(p) ? p : [] } catch {}
-      try { const p = JSON.parse(rows[0].tags || '[]'); tags = Array.isArray(p) ? p : [] } catch {}
-
-      return { ok: true, aliases, tags }
+      return { ok: true, aliases: parseJsonStringArray(rows[0].aliases), tags: parseJsonStringArray(rows[0].tags) }
     })
   )
 
-  // v0.6.0: 已移除 getTagSummary 和 getImagesByTag RPC（标签视图已废弃）
 }

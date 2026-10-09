@@ -110,13 +110,12 @@
                     <button
                       v-if="item.type === 'local'"
                       class="gallery-select-toggle"
+                      :class="{ checked: isImageSelected(item.value) }"
                       @click.stop="toggleImageSelection(item.value)"
                       :title="isImageSelected(item.value) ? '取消选择' : '选择图片'"
-                    >
-                      <svg v-if="isImageSelected(item.value)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                        <polyline points="20 6 9 17 4 12"></polyline>
-                      </svg>
-                    </button>
+                      :aria-pressed="isImageSelected(item.value)"
+                      :aria-label="isImageSelected(item.value) ? `取消选择，第 ${getImageSelectionIndex(item.value)} 张` : '选择图片'"
+                    >{{ getImageSelectionIndex(item.value) || '' }}</button>
                     <div
                       class="gallery-img-container"
                       @click="handleGalleryItemClick(item)"

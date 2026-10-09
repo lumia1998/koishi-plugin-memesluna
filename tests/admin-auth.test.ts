@@ -83,8 +83,9 @@ describe('管理权限边界', () => {
     if (mode === 'wrong-token') f.token.token = 'stored-token'
     const suppliedToken = mode === 'wrong-token' ? 'wrong-token' : f.token.token
     expect(await isAdminToken(f.ctx, suppliedToken)).toBe(false)
-    const response = await f.request('/memesluna/api/admin/collections/a', { method: 'DELETE', headers: { Authorization: `Bearer ${suppliedToken}` } })
+    const response = await f.request('/memesluna/api/admin/staged-images/id', { headers: { Authorization: `Bearer ${suppliedToken}` } })
     expect(response.status).toBe(401)
+    expect(f.service.getStagedImageBuffer).not.toHaveBeenCalled()
     await expect(f.listeners['memesluna/createCollection'].callback.call({ auth: { ...f.token, token: suppliedToken } }, 'a')).rejects.toThrow('Unauthorized')
     expect(f.service.deleteCollection).not.toHaveBeenCalled()
   })

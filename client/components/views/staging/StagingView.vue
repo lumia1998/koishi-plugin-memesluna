@@ -71,13 +71,12 @@
                 >
                   <button
                     class="staging-select-toggle"
+                    :class="{ checked: isStagedSelected(item.id) }"
                     @click.stop="toggleStagedSelection(item.id)"
                     :title="isStagedSelected(item.id) ? '取消选择' : '选择图片'"
-                  >
-                    <svg v-if="isStagedSelected(item.id)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                      <polyline points="20 6 9 17 4 12"></polyline>
-                    </svg>
-                  </button>
+                    :aria-pressed="isStagedSelected(item.id)"
+                    :aria-label="isStagedSelected(item.id) ? `取消选择，第 ${getStagedSelectionIndex(item.id)} 张` : '选择图片'"
+                  >{{ getStagedSelectionIndex(item.id) || '' }}</button>
                   <button class="staging-image-shell" @click="openImage(getStagedImageUrl(item.id))" title="打开原图">
                     <AuthenticatedImage
                       class="staging-image"
@@ -172,13 +171,12 @@
               >
                 <button
                   class="staging-select-toggle"
+                  :class="{ checked: isStagedSelected(item.id) }"
                   @click.stop="toggleStagedSelection(item.id)"
                   :title="isStagedSelected(item.id) ? '取消选择' : '选择图片'"
-                >
-                  <svg v-if="isStagedSelected(item.id)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                  </svg>
-                </button>
+                  :aria-pressed="isStagedSelected(item.id)"
+                  :aria-label="isStagedSelected(item.id) ? `取消选择，第 ${getStagedSelectionIndex(item.id)} 张` : '选择图片'"
+                >{{ getStagedSelectionIndex(item.id) || '' }}</button>
                 <button class="staging-image-shell" @click="openImage(getStagedImageUrl(item.id))" title="打开原图">
                   <AuthenticatedImage
                     class="staging-image"
